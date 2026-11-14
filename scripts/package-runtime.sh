@@ -15,7 +15,8 @@ for module in runtime/meson8b-runtime.ko vdec/meson-vdec.ko venc/meson-venc.ko; 
     install -m 644 "$root/$module" "$dest/modules/"
 done
 cp -a "$root/firmware/meson" "$dest/firmware/"
-install -m 755 "$root/scripts/runtime-device.py" "$dest/scripts/"
+install -m 755 "$root/scripts/runtime-device.py" "$root/scripts/install-autoload.sh" "$root/scripts/remove-autoload.sh" "$dest/scripts/"
+cp -a "$root/systemd" "$dest/systemd"
 install -m 644 "$root/README.md" "$dest/README.md"
 install -m 644 "$root/LICENSE" "$dest/LICENSE"
 cp -a "$root/patches" "$dest/patches"

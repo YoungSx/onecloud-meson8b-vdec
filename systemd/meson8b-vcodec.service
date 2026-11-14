@@ -1,0 +1,16 @@
+[Unit]
+Description=OneCloud Meson8b V4L2 codecs
+After=local-fs.target
+ConditionKernelVersion=5.15.79-meson
+ConditionPathExists=/opt/meson8b-vcodec/current/KERNEL_RELEASE
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /opt/meson8b-vcodec/current/scripts/runtime-device.py load /opt/meson8b-vcodec/current
+ExecStop=/usr/bin/python3 /opt/meson8b-vcodec/current/scripts/runtime-device.py unload
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

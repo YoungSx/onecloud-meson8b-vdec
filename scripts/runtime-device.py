@@ -47,6 +47,7 @@ def checked_package(package):
     expected_fw = {
         'firmware/meson/vdec/meson8b-runtime.dtbo',
         'firmware/meson/vdec/meson8b_h264.bin',
+        'firmware/meson/vdec/meson8b_hevc.bin',
         'firmware/meson/vdec/meson8b_mpeg12.bin',
         'firmware/meson/vdec/meson8b_mpeg4.bin',
         'firmware/meson/vdec/meson8b_vc1.bin',
@@ -153,16 +154,53 @@ def unload():
             subprocess.run(['rmmod', module], check=True)
 
 
+def load_package(package):
+    files = checked_package(package)
+    check_target(package)
+    for name, digest in files.items():
+        if name.startswith('firmware/'):
+            deployed = Path('/lib/firmware') / Path(name).relative_to('firmware')
+            if not deployed.is_file() or sha(deployed) != digest:
+                raise ValueError('deployed firmware differs from checked package: ' + name)
+    if set(MODULES) & loaded():
+        raise ValueError('codec modules already loaded')
+    started = []
+    try:
+        for dependency in ('v4l2_mem2mem', 'videobuf2_dma_contig', 'videobuf2_vmalloc'):
+            subprocess.run(['modprobe', dependency], check=True)
+        for name, module in zip(MODULE_FILES, MODULES):
+            subprocess.run(['insmod', str(package / 'modules' / name)], check=True)
+            started.append(module)
+        # insmod may succeed even when a platform probe failed.
+        names = {p.read_text().strip() for p in Path('/sys/class/video4linux').glob('*/name')}
+        if not {'meson-video-decoder', 'meson-video-encoder'} <= names:
+            raise ValueError('both codec devices must probe successfully')
+    except Exception:
+        for module in reversed(started):
+            if module in loaded():
+                subprocess.run(['rmmod', module], check=True)
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
-    for command in ('apply', 'check'):
+    for command in ('apply', 'check', 'load'):
         p = sub.add_parser(command)
         p.add_argument('package', type=Path)
         if command == 'apply':
             p.add_argument('state', type=Path)
     sub.add_parser('rollback').add_argument('state', type=Path)
+    sub.add_parser('unload')
     args = parser.parse_args()
+    if args.command == 'unload':
+        if os.geteuid():
+            raise ValueError('run as root')
+        unload()
+        return
+    if args.command == 'load':
+        load_package(args.package.resolve())
+        return
     if args.command == 'rollback':
         if os.geteuid():
             raise ValueError('run as root')
@@ -182,10 +220,7 @@ def main():
     state = args.state.resolve()
     try:
         stage_firmware(package, state, files)
-        for dependency in ('v4l2_mem2mem', 'videobuf2_dma_contig', 'videobuf2_vmalloc'):
-            subprocess.run(['modprobe', dependency], check=True)
-        for name in MODULE_FILES:
-            subprocess.run(['insmod', str(package / 'modules' / name)], check=True)
+        load_package(package)
         data = json.loads((state / 'state.json').read_text())
         data['status'] = 'loaded'
         save_state(state, data)
