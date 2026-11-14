@@ -25,12 +25,17 @@
      if (V4L2_TYPE_IS_OUTPUT(ctx->type))
          pfd.events =  POLLOUT | POLLWRNORM;
      else {
-@@ -340,6 +324,8 @@
+@@ -340,7 +324,12 @@
          else
              av_log(logger(ctx), AV_LOG_WARNING, "%s POLLERR\n", ctx->name);
  
-+        if (ioctl(ctx_to_m2mctx(ctx)->fd, VIDIOC_DQBUF, &buf) < 0 && errno != EAGAIN)
-+            ctx->done = 1;
-         return NULL;
+-        return NULL;
++        /* The queues may not be streaming yet. Once active, use the normal
++         * dequeue path to distinguish EAGAIN from a terminal queue error.
++         */
++        if (!ctx->buffers || !ctx->streamon)
++            return NULL;
++        goto dequeue;
      }
  
+     /* 1. handle resolution changes */

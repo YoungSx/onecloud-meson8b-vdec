@@ -25,13 +25,13 @@ def sha(path):
 
 
 def checked_package(package):
-    """Manifest must cover exactly the regular module/firmware payload."""
+    """Manifest covers modules, firmware, scripts, tools and provenance."""
     files = {}
     for line in (package / 'SHA256SUMS').read_text().splitlines():
         digest, name = line.split('  ', 1)
         relative = Path(name)
         if (relative.is_absolute() or '..' in relative.parts or
-                relative.parts[0] not in ('modules', 'firmware') or name in files):
+                relative.parts[0] not in ('modules', 'firmware', 'scripts', 'tools', 'patches', 'config', 'systemd', 'README.md', 'LICENSE', 'KERNEL_RELEASE', 'SOURCE_COMMIT', 'TARGET_PROVIDERS.json') or name in files):
             raise ValueError('invalid package path: ' + name)
         path = package / relative
         if any(p.is_symlink() for p in [path, *path.parents]) or not path.is_file():
@@ -39,8 +39,8 @@ def checked_package(package):
         if sha(path) != digest:
             raise ValueError('package checksum mismatch: ' + name)
         files[name] = digest
-    actual = {str(p.relative_to(package)) for directory in ('modules', 'firmware')
-              for p in (package / directory).rglob('*') if p.is_file()}
+    actual = {str(p.relative_to(package)) for p in package.rglob('*')
+              if p.is_file() and p.name != 'SHA256SUMS'}
     if actual != files.keys() or {n for n in files if n.startswith('modules/')} != {
             'modules/' + name for name in MODULE_FILES}:
         raise ValueError('package manifest does not cover exactly its payload')

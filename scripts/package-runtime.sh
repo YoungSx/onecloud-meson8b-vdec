@@ -37,5 +37,5 @@ Path(sys.argv[2]).write_text(json.dumps(values,indent=2)+'\n')
 PYCODE
 printf '%s\n' 5.15.79-meson > "$dest/KERNEL_RELEASE"
 git -C "$root" rev-parse HEAD > "$dest/SOURCE_COMMIT"
-(cd "$dest"; find modules firmware -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+(cd "$dest"; find . -type f ! -name SHA256SUMS -printf '%P\0' | sort -z | xargs -0 sha256sum > SHA256SUMS)
 printf 'Runtime package: %s\n' "$dest"
