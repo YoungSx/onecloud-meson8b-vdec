@@ -37,5 +37,8 @@ Path(sys.argv[2]).write_text(json.dumps(values,indent=2)+'\n')
 PYCODE
 printf '%s\n' 5.15.79-meson > "$dest/KERNEL_RELEASE"
 git -C "$root" rev-parse HEAD > "$dest/SOURCE_COMMIT"
-(cd "$dest"; find . -type f ! -name SHA256SUMS -printf '%P\0' | sort -z | xargs -0 sha256sum > SHA256SUMS)
+manifest=$(mktemp)
+trap 'rm -f "$manifest"' EXIT
+(cd "$dest"; find . -type f -printf '%P\0' | sort -z | xargs -0 sha256sum) > "$manifest"
+install -m 644 "$manifest" "$dest/SHA256SUMS"
 printf 'Runtime package: %s\n' "$dest"
