@@ -46,6 +46,7 @@ void amvdec_dst_buf_done(struct amvdec_session *sess,
 void amvdec_dst_buf_done_offset(struct amvdec_session *sess,
 				struct vb2_v4l2_buffer *vbuf,
 				u32 offset, u32 field, bool allow_drop);
+bool amvdec_timestamp_for_offset(struct amvdec_session *sess, u32 offset, u64 *timestamp);
 
 /**
  * amvdec_add_ts() - Add a timestamp to the list

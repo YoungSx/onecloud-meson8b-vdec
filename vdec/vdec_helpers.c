@@ -466,6 +466,23 @@ void amvdec_dst_buf_done(struct amvdec_session *sess,
 }
 EXPORT_SYMBOL_GPL(amvdec_dst_buf_done);
 
+bool amvdec_timestamp_for_offset(struct amvdec_session *sess, u32 offset, u64 *timestamp)
+{
+	struct amvdec_timestamp *entry;
+	unsigned long flags;
+	bool found = false;
+
+	spin_lock_irqsave(&sess->ts_spinlock, flags);
+	list_for_each_entry(entry, &sess->timestamps, list) {
+		if (entry->offset > offset)
+			break;
+		*timestamp = entry->ts;
+		found = true;
+	}
+	spin_unlock_irqrestore(&sess->ts_spinlock, flags);
+	return found;
+}
+
 void amvdec_dst_buf_done_offset(struct amvdec_session *sess,
 				struct vb2_v4l2_buffer *vbuf,
 				u32 offset, u32 field, bool allow_drop)

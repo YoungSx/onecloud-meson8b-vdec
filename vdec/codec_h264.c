@@ -441,6 +441,11 @@ static void codec_h264_frames_ready(struct amvdec_session *sess, u32 status)
 	int error_count;
 	int num_frames;
 	int i;
+	struct {
+		u32 status, offset;
+		u64 timestamp;
+		bool has_timestamp;
+	} frames[6], tmp;
 
 	error_count = amvdec_read_dos(core, AV_SCRATCH_D);
 	num_frames = (status >> 8) & 0xff;
@@ -468,11 +473,35 @@ static void codec_h264_frames_ready(struct amvdec_session *sess, u32 status)
 	}
 
 	for (i = 0; i < num_frames; i++) {
-		u32 frame_status = amvdec_read_dos(core, AV_SCRATCH_1 + i * 4);
+		frames[i].status = amvdec_read_dos(core, AV_SCRATCH_1 + i * 4);
+		frames[i].offset = (frames[i].status >> OFFSET_BIT) & OFFSET_MASK;
+		frames[i].offset |= get_offset_msb(core, i);
+		frames[i].has_timestamp = amvdec_timestamp_for_offset(sess,
+			frames[i].offset, &frames[i].timestamp);
+	}
+	/* The M8 EOS batch can be in decode order. Preserve presentation order
+	 * using the queued PTS; byte offsets alone would sort B pictures wrongly.
+	 */
+	if (core->platform->revision == VDEC_REVISION_MESON8B && sess->should_stop) {
+		int j;
+
+		for (i = 1; i < num_frames; i++) {
+			tmp = frames[i];
+			j = i;
+			while (j && tmp.has_timestamp && frames[j - 1].has_timestamp &&
+			       tmp.timestamp < frames[j - 1].timestamp) {
+				frames[j] = frames[j - 1];
+				j--;
+			}
+			frames[j] = tmp;
+		}
+	}
+	for (i = 0; i < num_frames; i++) {
+		u32 frame_status = frames[i].status;
 		u32 buffer_index = frame_status & BUF_IDX_MASK;
 		u32 pic_struct = (frame_status >> PIC_STRUCT_BIT) &
 				 PIC_STRUCT_MASK;
-		u32 offset = (frame_status >> OFFSET_BIT) & OFFSET_MASK;
+		u32 offset = frames[i].offset;
 		u32 field = V4L2_FIELD_NONE;
 
 		/*
@@ -489,7 +518,6 @@ static void codec_h264_frames_ready(struct amvdec_session *sess, u32 status)
 		else if (pic_struct == PIC_BOT_TOP)
 			field = V4L2_FIELD_INTERLACED_BT;
 
-		offset |= get_offset_msb(core, i);
 		amvdec_dst_buf_done_idx(sess, buffer_index, offset, field);
 	}
 }

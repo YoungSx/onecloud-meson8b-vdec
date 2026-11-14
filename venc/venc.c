@@ -741,7 +741,7 @@ static void venc_buffspec_init(struct venc_ctx *ctx)
 	u32 ch = ALIGN(ctx->height, 16);
 
 	ctx->mem.dct_start = ctx->buffers[VENC_INPUT].paddr;
-	ctx->mem.dct_end = ctx->mem.dct_start + 0x6ba000 - 1;
+	ctx->mem.dct_end = ctx->mem.dct_start + ctx->buffers[VENC_INPUT].size - 1;
 	ctx->mem.dec0_y = ctx->buffers[VENC_REF0].paddr;
 	ctx->mem.dec0_uv = ctx->mem.dec0_y + cw * ch;
 	ctx->mem.dec1_y = ctx->buffers[VENC_REF1].paddr;
@@ -825,16 +825,24 @@ static int venc_alloc_buffers(struct venc_ctx *ctx)
 
 	for (i = 0; i < ARRAY_SIZE(ctx->buffers); i++) {
 		ctx->buffers[i].size = sizes[i];
-		ctx->buffers[i].vaddr = dma_alloc_coherent(ctx->core->dev, sizes[i],
-					 &ctx->buffers[i].paddr, GFP_KERNEL);
+		if (i == VENC_INPUT) {
+			u32 stride = venc_in_canvas_w(ctx->src_fmt, ctx->width);
+			u32 rows = ALIGN(ctx->height, 16);
+
+			/* MFDIN reads raw planes, not the vendor private MB input ABI. */
+			ctx->buffers[i].size = PAGE_ALIGN(stride * rows * 3 / 2);
+		}
+		ctx->buffers[i].vaddr = dma_alloc_coherent(ctx->core->dev,
+			ctx->buffers[i].size, &ctx->buffers[i].paddr, GFP_KERNEL);
 		if (!ctx->buffers[i].vaddr) {
 			dev_err(ctx->core->dev, "DMA region %u (%u bytes) unavailable\n",
-				i, sizes[i]);
+				i, ctx->buffers[i].size);
 			venc_free_buffers(ctx);
 			return -ENOMEM;
 		}
 	}
-	memset(ctx->buffers[VENC_INPUT].vaddr, 0, sizes[VENC_INPUT]);
+
+	memset(ctx->buffers[VENC_INPUT].vaddr, 0, ctx->buffers[VENC_INPUT].size);
 	return 0;
 }
 
