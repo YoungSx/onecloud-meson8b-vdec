@@ -11,3 +11,5 @@ __pycache__/
 private/*.yuv
 sources/
 res-switch-test
+/firmware/meson/vdec/meson8b-runtime.dtbo
+/tests/ctrl-probe

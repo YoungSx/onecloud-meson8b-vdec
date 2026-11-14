@@ -75,3 +75,11 @@ with software transcoding.
 
 SublinkPro, VoCat, Home Assistant were running at this run's baseline;
 OpenList/Arcane were absent. Acceptance applies to the running services.
+
+Final package installation check also passed: checksum + kernel + live
+provider validation, all three modules loaded, two JPEG frames encoded,
+then runtime-device.py rollback restored firmware and removed all codec
+nodes/modules and the DOS resource. Running service states remained active.
+See concurrency-2026-11-14/runtime-cycle.log. Installer host tests cover
+interrupted staging recovery, repeat rollback, later-update refusal and
+symlink/path escape checks (10 Python tests total).
