@@ -1,11 +1,12 @@
 # 下一步任务计划
 
-当前状态（2026-11-13 深夜）：硬解验收 1-4 全部通过；**P3 编码（HCODEC
+当前状态（2026-11-14）：原内核运行时硬解、硬编及自动加载已验证；**P3 编码（HCODEC
 H.264 encoder）三项全部完成**：1080p V4L2 M2M 编码可用（ffmpeg
 `h264_v4l2m2m`），矩阵 PSNR 42.6-45.7 dB，1080p30 编码 CPU -75%、
 28.4fps 近实时；**P4-14 CBR 码率控制完成**（误差 ≤1.4%）。
 免重启可回滚。
-剩余工作按优先级：
+HEVC、B 帧并发与最终安装见末尾“最终补全”；以下保留开发阶段记录。
+未替换内核或重启，新的启动内核不在已验证范围。
 
 ## 已完成（历史存档）
 
@@ -133,18 +134,18 @@ H.264 encoder）三项全部完成**：1080p V4L2 M2M 编码可用（ffmpeg
 
 ## P5 — 上游化（可选，长期）
 
-18. Meson8b 平台数据 + capture 路径整理成 linux-media RFC 补丁。
-    resume 竞态修复（capture_queue_fits）值得单独提交上游——它是通用
-    stateful decoder 竞态，GXL/G12A 同样受影响。
+18. 本地 RFC 草稿和 5.15.79 additive 补丁已整理，见 `docs/linux-media-rfc.md`。
+    当前主线移植、静态 DT/power-domain 设计和公开提交未完成。resume 竞态
+    修复（capture_queue_fits）可独立评审；其他 GX 平台未在本机验证。
 
-## 可选项（原 P1-7）
+## 自动加载（原 P1-7，已完成）
 
-- 开机自动加载 systemd unit，含失败自动 rmmod 回退（当前手动 insmod 流程
-  已稳定运行，按需再做）。
+- systemd unit 与校验安装、失败卸载、固件恢复已实机验证；最终包已启用。
+  未重启验证开机过程。
 
 ## 风险与边界
 
-- 内核小版本升级破坏 vermagic 绑定，需重编两模块（构建流程在 README）。
+- 内核小版本升级破坏 vermagic 绑定，需重编三个模块（构建流程在 README）。
 - 目标机是在役生产机：所有验证用单会话回退路径；kill -9 残留会话后需
   rmmod+等待+重载两模块清 VDEC 状态（观测到的 abort 洪泛属此情况）。
 - 测量必须无值守（nohup）：管理 SSH 经 DERP 中继污染 CPU 数据。

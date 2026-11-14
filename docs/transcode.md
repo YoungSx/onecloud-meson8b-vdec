@@ -2,8 +2,15 @@
 
 先按 README 加载 runtime、decoder、encoder 三模块；不改 WanOS 应用层。
 ffmpeg 的 v4l2m2m 列表只说明包装器已编译，实际驱动与格式用 QUERYCAP /
-ENUM_FMT 验证。`tests/probe-v4l2.c` 可交叉编译后枚举设备；目标机当前没有
-v4l2-ctl，也没有 ffprobe，产物在外部主机用 ffprobe 独立检查。
+ENUM_FMT 验证。`tests/probe-v4l2.c` 可交叉编译后枚举设备；独立包提供
+`tools/ffprobe`，产物也在外部主机独立检查。
+源码补充包的静态 `tools/v4l2-ctl` 已在目标机枚举全部格式和控件：
+
+```sh
+/root/venc-deploy/v4l2-ctl --list-devices
+/root/venc-deploy/v4l2-ctl -d /dev/video0 --list-formats-out --list-formats --list-ctrls
+/root/venc-deploy/v4l2-ctl -d /dev/video1 --list-formats-out --list-formats --list-ctrls
+```
 
 ## H.264 硬解到硬编
 
@@ -55,14 +62,15 @@ ffmpeg -c:v mpeg2_v4l2m2m -i input.ts -c:v h264_v4l2m2m -b:v 0 -c:a copy output.
 
 OpenList 的入库文件可用外部脚本预转码，再让文件服务索引产物。具体应用
 集成需遵循当前部署的接口，不用修改 OpenList/WanOS 核心。
-此前 OpenList/Arcane 服务验收记录是历史状态；2026-11-14 运行基线中未见
-这两个进程/容器，不能认为当前转码链已经接入它们。
+OpenList、Arcane 原容器已恢复并纳入最终服务检查；应用内部自动转码链路
+尚未配置，当前使用显式 ffmpeg 命令。
 
 ## 卸载
 
-结束所有客户端后依次执行 `rmmod meson_venc`、`rmmod meson_vdec`、
-`rmmod meson8b_runtime`，恢复被覆盖的固件/overlay 文件。三模块完整卸载已
-实测，DOS 资源和 video 节点都撤销，原启动路径保持原状。
+使用最终自动加载安装时，结束所有客户端后执行
+`bash /opt/meson8b-vcodec/current/scripts/remove-autoload.sh`，移除自动加载、
+卸载三个模块并恢复原固件。手动 apply 安装则使用对应 state 目录运行
+`runtime-device.py rollback STATE`。完整卸载已实测，DOS 资源和 video 节点都撤销。
 
 ## HEVC 与自动加载
 

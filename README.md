@@ -4,9 +4,10 @@
 V4L2 Memory-to-Memory 编解码设备。使用原内核的设备树 overlay、canvas、
 时钟与媒体框架；构建在外部机器完成，无需改写 `/boot` 或重启。
 
-2026-11-14 实机验证：JPEG 编码 320×240–1080p 八组输入矩阵通过；H.264
-硬解到硬编 720p、1080p Baseline 60 帧通过，1080p 连续五轮输出均可播放，
-逐帧 PSNR 平均 45.41 dB。独立 H.264 硬解与软解 NV12 MD5 60/60 一致。
+2026-11-14 实机验证：JPEG 编码八组输入矩阵和 900 帧 1080p 长时检查通过；
+H.264 1080p B 帧输入连续十轮硬解到硬编通过，60 帧逐帧 PSNR 最低
+45.03 dB、平均 45.82 dB。独立 H.264 硬解与软解 NV12 MD5 60/60 一致；
+HEVC Main 8-bit 的小尺寸、裁剪尺寸及 1080p B 帧均逐帧精确匹配。
 此前 300 帧硬解、CBR、MPEG-2/MPEG-4/VC-1/MJPEG 验证见 `evidence/`。
 
 ## 能力与边界
@@ -39,8 +40,10 @@ VoCat、Home Assistant 正常并保持运行；OpenList、Arcane 原容器已恢
 需要 Linux 5.15.79 OneCloud 匹配源码、目标配置和已准备好的构建目录。
 基线来源为 hzyitc/armbian-onecloud `ci-20221118-033748-UTC`，Armbian 提交
 `d01e3519a87ab6a3b8df3f71da81d7040137b49f`。本任务外层 `baseline/` 是原发行
-内核源码补丁；外层 `patches/`、研究版 README 和内核包是早期实验存档，
+内核源码补丁，本仓库 `baseline/` 保留相同副本；外层 `patches/`、研究版
+README 和内核包是早期实验存档，
 不代表这里已验证的运行时实现。不要安装那个研究版启动包。
+从干净源码复现内核构建环境及交付包见 `docs/reproduce.md`。
 
 ```sh
 # GCC 11 armhf，目标 kernelrelease 必须是 5.15.79-meson
@@ -101,7 +104,8 @@ rmmod meson8b_runtime
 - `evidence/P6-JPEG-ENCODE-ACCEPTANCE-2026-11-14.md`：JPEG/AVC 回归、固件错误恢复。
 - `evidence/P6-TRANSCODE-ACCEPTANCE-2026-11-14.md`：并发修复、五轮压测、CMA 边界。
 - `docs/hevc-feasibility.md`：固定源码硬件证据；当前实现验收见 `evidence/HEVC-ACCEPTANCE-2026-11-14.md`。
-- `ROADMAP.md`：已完成任务及长期可选项。RFC 上游化与自动加载不是当前交付。
+- `ROADMAP.md`：已完成任务及长期可选项。自动加载已交付；RFC 为本地草稿。
+- `docs/rollout-status.md`：最终安装版本、归档校验值、服务状态与回滚命令。
 
 GPL-2.0 / GPL-2.0+，以各文件 SPDX 为准。微码来源许可和提取元数据见
 `LICENSE` 与 `firmware/sources.json`。
@@ -153,6 +157,8 @@ sudo bash runtime-package/scripts/remove-autoload.sh
 
 自动加载启停、平台 probe 失败卸载和完整移除已在目标机测试，未为测试重启。
 最终安装保留可用设备；停止该 unit 就会卸载 codec，客户端须先退出。
+源码补充包 `build/onecloud-verified-source.tar.gz` 附有独立静态 `tools/v4l2-ctl`，
+其设备、格式和控件枚举已在目标机验证；运行包内驱动/固件保持已验收版本。
 目标原 ffmpeg 未编入 hevc_v4l2m2m，交付的独立 `tools/ffmpeg` 含该包装器及
 V4L2 drain 修复，原 `/usr/local/bin/ffmpeg` 保留。用法：
 
