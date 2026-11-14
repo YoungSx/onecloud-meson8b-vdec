@@ -1158,9 +1158,20 @@ static int vdec_probe(struct platform_device *pdev)
 
 	core->dev = dev;
 	platform_set_drvdata(pdev, core);
+	of_id = of_match_node(vdec_dt_match, dev->of_node);
+	core->platform = of_id->data;
+	if (core->platform->revision == VDEC_REVISION_MESON8B &&
+	    !meson8b_runtime_ready())
+		return -EPROBE_DEFER;
 
 	r = platform_get_resource_byname(pdev, IORESOURCE_MEM, "dos");
-	core->dos_base = devm_ioremap_resource(dev, r);
+	if (core->platform->revision == VDEC_REVISION_MESON8B) {
+		if (!r || r->start != 0xd0050000 || resource_size(r) != SZ_64K)
+			return -EINVAL;
+		core->dos_base = meson8b_runtime_dos_base();
+	} else {
+		core->dos_base = devm_ioremap_resource(dev, r);
+	}
 	if (IS_ERR(core->dos_base))
 		return PTR_ERR(core->dos_base);
 
@@ -1180,12 +1191,6 @@ static int vdec_probe(struct platform_device *pdev)
 	core->canvas = meson_canvas_get(dev);
 	if (IS_ERR(core->canvas))
 		return PTR_ERR(core->canvas);
-
-	of_id = of_match_node(vdec_dt_match, dev->of_node);
-	core->platform = of_id->data;
-	if (core->platform->revision == VDEC_REVISION_MESON8B &&
-	    !meson8b_runtime_ready())
-		return -EPROBE_DEFER;
 
 	if (core->platform->revision == VDEC_REVISION_G12A ||
 	    core->platform->revision == VDEC_REVISION_SM1) {

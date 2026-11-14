@@ -65,6 +65,7 @@ def render(tree):
                 interrupt-names = "venc";
                 clocks = <{clkc} 17>, <{clkc} 199>;
                 clock-names = "dos", "vdec_hcodec";
+                amlogic,ao-sysctrl = <{pmu}>;
                 amlogic,canvas = <{canvas}>;
                 status = "okay";
             }};

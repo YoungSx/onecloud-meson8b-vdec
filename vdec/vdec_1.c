@@ -121,7 +121,8 @@ static void vdec_1_conf_esparser(struct amvdec_session *sess)
 	struct amvdec_core *core = sess->core;
 
 	/* VDEC_1 specific ESPARSER stuff */
-	amvdec_write_dos(core, DOS_GEN_CTRL0, 0);
+	/* Bits 2:1 select the parser destination; bit 0 belongs to HCODEC. */
+	amvdec_clear_dos_bits(core, DOS_GEN_CTRL0, GENMASK(2, 1));
 	amvdec_write_dos(core, VLD_MEM_VIFIFO_BUF_CNTL, 1);
 	amvdec_clear_dos_bits(core, VLD_MEM_VIFIFO_BUF_CNTL, 1);
 }

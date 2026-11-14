@@ -11,6 +11,7 @@
 #include <linux/firmware.h>
 #include <linux/mutex.h>
 #include <linux/workqueue.h>
+#include <linux/regmap.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-mem2mem.h>
@@ -20,8 +21,6 @@
 
 #include "hcodec_regs.h"
 
-/* Vendor 1080P buffspec, 17.4 MiB (encoder always uses this level) */
-#define VENC_BUF_SIZE		0x1160000
 #define VENC_BITSTREAM_SIZE	0x100000
 #define VENC_MC_SIZE		(4096 * 4)
 #define VENC_FW_NAME		"meson/venc/meson8b_avc_enc.bin"
@@ -35,7 +34,7 @@ struct venc_core {
 
 	void __iomem *dos_base;
 	void __iomem *ao_pwr_base;	/* AO_RTI_PWR_CNTL_REG0 window */
-	void __iomem *ao_sleep_base;	/* AO_RTI_GEN_PWR_SLEEP0/ISO0 window */
+	struct regmap *regmap_ao;	/* shared Meson8b PMU */
 	struct meson_canvas *canvas;
 	struct clk *dos_clk;
 	struct clk *hcodec_clk;
@@ -71,9 +70,12 @@ struct venc_ctx {
 	u32 dst_fmt;
 	u32 jpeg_quality;
 
-	/* single big buffer laid out per vendor buffspec */
-	void *buf_vaddr;
-	dma_addr_t buf_paddr;
+	/* Preserve vendor region sizes without one 17 MiB CMA allocation. */
+	struct {
+		void *vaddr;
+		dma_addr_t paddr;
+		u32 size;
+	} buffers[6]; /* input, reference 0/1, firmware, bitstream, analysis */
 	const struct firmware *fw;
 
 	struct {
@@ -95,6 +97,15 @@ struct venc_ctx {
 	void *sps_pps;
 };
 
+enum venc_buffer_id {
+	VENC_INPUT, VENC_REF0, VENC_REF1, VENC_WORKSPACE, VENC_STREAM, VENC_ANALYSIS
+};
+
+static inline void *venc_stream_vaddr(struct venc_ctx *ctx)
+{
+	return ctx->buffers[VENC_STREAM].vaddr;
+}
+
 void venc_jpeg_init(struct venc_ctx *ctx);
 
 static inline u32 venc_read(struct venc_core *core, u32 reg)
@@ -108,9 +119,8 @@ static inline void venc_write(struct venc_core *core, u32 reg, u32 val)
 }
 
 /*
- * AO accessors take aobus byte offsets (AO_RTI_*) and translate them into
- * the ao-pwr window (starts at AO_RTI_PWR_CNTL_REG0) or the ao-sleep window
- * (starts at AO_RTI_GEN_PWR_SLEEP0).
+ * The dedicated AO power-control window starts at AO_RTI_PWR_CNTL_REG0.
+ * Sleep/isolation updates use the shared PMU regmap.
  */
 static inline u32 venc_read_ao(struct venc_core *core, u32 reg)
 {
@@ -120,17 +130,6 @@ static inline u32 venc_read_ao(struct venc_core *core, u32 reg)
 static inline void venc_write_ao(struct venc_core *core, u32 reg, u32 val)
 {
 	writel_relaxed(val, core->ao_pwr_base + reg - AO_RTI_PWR_CNTL_REG0);
-}
-
-static inline u32 venc_read_ao_sleep(struct venc_core *core, u32 reg)
-{
-	return readl_relaxed(core->ao_sleep_base + reg - AO_RTI_GEN_PWR_SLEEP0);
-}
-
-static inline void venc_write_ao_sleep(struct venc_core *core, u32 reg,
-				       u32 val)
-{
-	writel_relaxed(val, core->ao_sleep_base + reg - AO_RTI_GEN_PWR_SLEEP0);
 }
 
 #endif

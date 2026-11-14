@@ -10,6 +10,7 @@
 #include <media/videobuf2-dma-contig.h>
 
 #include "vdec_helpers.h"
+#include "../runtime/meson8b-runtime.h"
 
 #define NUM_CANVAS_NV12 2
 #define NUM_CANVAS_YUV420 3
@@ -28,12 +29,20 @@ EXPORT_SYMBOL_GPL(amvdec_write_dos);
 
 void amvdec_write_dos_bits(struct amvdec_core *core, u32 reg, u32 val)
 {
+	if (core->platform->revision == VDEC_REVISION_MESON8B) {
+		meson8b_runtime_update_dos_bits(reg, val, val);
+		return;
+	}
 	amvdec_write_dos(core, reg, amvdec_read_dos(core, reg) | val);
 }
 EXPORT_SYMBOL_GPL(amvdec_write_dos_bits);
 
 void amvdec_clear_dos_bits(struct amvdec_core *core, u32 reg, u32 val)
 {
+	if (core->platform->revision == VDEC_REVISION_MESON8B) {
+		meson8b_runtime_update_dos_bits(reg, val, 0);
+		return;
+	}
 	amvdec_write_dos(core, reg, amvdec_read_dos(core, reg) & ~val);
 }
 EXPORT_SYMBOL_GPL(amvdec_clear_dos_bits);

@@ -30,6 +30,7 @@ class OverlayTests(unittest.TestCase):
             self.assertIn('clocks = <1 54>, <1 17>, <1 196>;', text)
             self.assertIn('amlogic,canvas = <2>;', text)
             self.assertIn('amlogic,ao-sysctrl = <3>;', text)
+            self.assertEqual(text.count('amlogic,ao-sysctrl = <3>;'), 2)
             self.assertIn('resets = <4 40>;', text)
             self.assertIn('0xd0050000 0x10000', text)
 

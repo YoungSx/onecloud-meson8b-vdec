@@ -14,6 +14,7 @@
 #include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/mfd/syscon.h>
 #include <media/v4l2-event.h>
 #include <media/v4l2-ioctl.h>
 
@@ -201,7 +202,7 @@ static int venc_loadmc(struct venc_ctx *ctx)
 	struct venc_core *core = ctx->core;
 	unsigned long timeout;
 
-	memcpy(ctx->buf_vaddr + (ctx->mem.assit - ctx->buf_paddr),
+	memcpy(ctx->buffers[VENC_WORKSPACE].vaddr,
 	       ctx->fw->data, VENC_MC_SIZE);
 
 	venc_write(core, HCODEC_MPSR, 0);
@@ -576,48 +577,59 @@ static int venc_poweron(struct venc_core *core)
 	venc_write_ao(core, AO_RTI_PWR_CNTL_REG0, data32 & ~0x18);
 	udelay(10);
 	/* power up HCODEC */
-	data32 = venc_read_ao_sleep(core, AO_RTI_GEN_PWR_SLEEP0);
-	venc_write_ao_sleep(core, AO_RTI_GEN_PWR_SLEEP0, data32 & ~0x3);
+	ret = regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0 - 0xe0,
+				 0x3, 0);
+	if (ret)
+		goto disable_clocks;
 	udelay(10);
 
 	venc_write(core, DOS_SW_RESET1, 0xffffffff);
 	venc_write(core, DOS_SW_RESET1, 0);
 
 	/* HDEC clock gates 12..26 of DOS_GCLK_EN0 (vendor hvdec_clock_enable) */
-	venc_write(core, DOS_GCLK_EN0,
-		   venc_read(core, DOS_GCLK_EN0) | (0x7fff << 12));
+	meson8b_runtime_update_dos_bits(DOS_GCLK_EN0, 0x7fff << 12, 0x7fff << 12);
 
 	/* power up HCODEC memories */
 	venc_write(core, DOS_MEM_PD_HCODEC, 0);
 
 	/* remove HCODEC isolation */
-	data32 = venc_read_ao_sleep(core, AO_RTI_GEN_PWR_ISO0);
-	venc_write_ao_sleep(core, AO_RTI_GEN_PWR_ISO0, data32 & ~0x30);
+	ret = regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_ISO0 - 0xe0,
+				 0x30, 0);
+	if (ret) {
+		venc_write(core, DOS_MEM_PD_HCODEC, 0xffffffff);
+		meson8b_runtime_update_dos_bits(DOS_GCLK_EN0, 0x7fff << 12, 0);
+		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0 - 0xe0,
+				   0x3, 0x3);
+		goto disable_clocks;
+	}
 	udelay(10);
 
 	/* auto-clock-gate pulse */
-	venc_write(core, DOS_GEN_CTRL0, venc_read(core, DOS_GEN_CTRL0) | 1);
-	venc_write(core, DOS_GEN_CTRL0, venc_read(core, DOS_GEN_CTRL0) & ~1);
+	meson8b_runtime_update_dos_bits(DOS_GEN_CTRL0, BIT(0), BIT(0));
+	meson8b_runtime_update_dos_bits(DOS_GEN_CTRL0, BIT(0), 0);
 
 	mdelay(10);
 	return 0;
+disable_clocks:
+	clk_disable_unprepare(core->hcodec_clk);
+	clk_disable_unprepare(core->dos_clk);
+	return ret;
 }
 
 /* Vendor avc_poweroff (Meson8b path) */
 static void venc_poweroff(struct venc_core *core)
 {
 	/* enable HCODEC isolation */
-	venc_write_ao_sleep(core, AO_RTI_GEN_PWR_ISO0,
-			    venc_read_ao_sleep(core, AO_RTI_GEN_PWR_ISO0) | 0x30);
+	regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_ISO0 - 0xe0,
+			   0x30, 0x30);
 	/* power off HCODEC memories */
 	venc_write(core, DOS_MEM_PD_HCODEC, 0xffffffff);
 	/* HCODEC clock gates off */
-	venc_write(core, DOS_GCLK_EN0,
-		   venc_read(core, DOS_GCLK_EN0) & ~(0x7fff << 12));
+	meson8b_runtime_update_dos_bits(DOS_GCLK_EN0, 0x7fff << 12, 0);
 	clk_disable_unprepare(core->hcodec_clk);
 	/* power off HCODEC */
-	venc_write_ao_sleep(core, AO_RTI_GEN_PWR_SLEEP0,
-			    venc_read_ao_sleep(core, AO_RTI_GEN_PWR_SLEEP0) | 0x3);
+	regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0 - 0xe0,
+			   0x3, 0x3);
 	clk_disable_unprepare(core->dos_clk);
 }
 
@@ -724,23 +736,24 @@ static irqreturn_t venc_isr(int irq, void *data)
 /* Vendor avc_buffspec_init: 1080P layout inside the big buffer */
 static void venc_buffspec_init(struct venc_ctx *ctx)
 {
-	dma_addr_t base = ctx->buf_paddr;
+	dma_addr_t base = ctx->buffers[VENC_WORKSPACE].paddr;
 	u32 cw = venc_in_canvas_w(V4L2_PIX_FMT_NV12M, ctx->width);
 	u32 ch = ALIGN(ctx->height, 16);
 
-	ctx->mem.dct_start = base;
-	ctx->mem.dct_end = base + 0x6ba000 - 1;
-	ctx->mem.dec0_y = base + 0x6d0000;
+	ctx->mem.dct_start = ctx->buffers[VENC_INPUT].paddr;
+	ctx->mem.dct_end = ctx->mem.dct_start + 0x6ba000 - 1;
+	ctx->mem.dec0_y = ctx->buffers[VENC_REF0].paddr;
 	ctx->mem.dec0_uv = ctx->mem.dec0_y + cw * ch;
-	ctx->mem.dec1_y = base + 0x9d0000;
+	ctx->mem.dec1_y = ctx->buffers[VENC_REF1].paddr;
 	ctx->mem.dec1_uv = ctx->mem.dec1_y + cw * ch;
-	ctx->mem.assit = base + 0xd10000;
-	ctx->mem.bitstream_start = base + 0xe00000;
+	ctx->mem.assit = base;
+	ctx->mem.bitstream_start = ctx->buffers[VENC_STREAM].paddr;
 	ctx->mem.bitstream_end = ctx->mem.bitstream_start + VENC_BITSTREAM_SIZE - 1;
-	ctx->mem.inter_bits = base + 0xf00000;
-	ctx->mem.inter_mv = base + 0xf08000;
-	ctx->mem.intra_bits = base + 0xf88000;
-	ctx->mem.intra_pred = base + 0xf90000;
+	base = ctx->buffers[VENC_ANALYSIS].paddr;
+	ctx->mem.inter_bits = base;
+	ctx->mem.inter_mv = base + 0x8000;
+	ctx->mem.intra_bits = base + 0x88000;
+	ctx->mem.intra_pred = base + 0x90000;
 
 	ctx->dblk_canvas = (ctx->canvas[2] << 16) | (ctx->canvas[1] << 8) |
 			   ctx->canvas[0];
@@ -790,6 +803,41 @@ static int venc_hw_init(struct venc_ctx *ctx)
 	return 0;
 }
 
+static void venc_free_buffers(struct venc_ctx *ctx)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(ctx->buffers); i++) {
+		if (!ctx->buffers[i].vaddr)
+			continue;
+		dma_free_coherent(ctx->core->dev, ctx->buffers[i].size,
+				  ctx->buffers[i].vaddr, ctx->buffers[i].paddr);
+		ctx->buffers[i].vaddr = NULL;
+	}
+}
+
+static int venc_alloc_buffers(struct venc_ctx *ctx)
+{
+	static const u32 sizes[] = {
+		0x6ba000, 0x300000, 0x300000, 0xc0000, 0x100000, 0x110000
+	};
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(ctx->buffers); i++) {
+		ctx->buffers[i].size = sizes[i];
+		ctx->buffers[i].vaddr = dma_alloc_coherent(ctx->core->dev, sizes[i],
+					 &ctx->buffers[i].paddr, GFP_KERNEL);
+		if (!ctx->buffers[i].vaddr) {
+			dev_err(ctx->core->dev, "DMA region %u (%u bytes) unavailable\n",
+				i, sizes[i]);
+			venc_free_buffers(ctx);
+			return -ENOMEM;
+		}
+	}
+	memset(ctx->buffers[VENC_INPUT].vaddr, 0, sizes[VENC_INPUT]);
+	return 0;
+}
+
 static int venc_hw_start(struct venc_ctx *ctx)
 {
 	struct venc_core *core = ctx->core;
@@ -797,13 +845,9 @@ static int venc_hw_start(struct venc_ctx *ctx)
 		VENC_JPEG_FW_NAME : VENC_FW_NAME;
 	int ret, i;
 
-	ctx->buf_vaddr = dma_alloc_coherent(core->dev, VENC_BUF_SIZE,
-					     &ctx->buf_paddr, GFP_KERNEL);
-	if (!ctx->buf_vaddr)
-		return -ENOMEM;
-
-	/* zero the input staging area so pad rows/bytes encode as black */
-	memset(ctx->buf_vaddr, 0, 0x6ba000);
+	ret = venc_alloc_buffers(ctx);
+	if (ret)
+		return ret;
 
 	ret = request_firmware(&ctx->fw, fw_name, core->dev);
 	if (ret) {
@@ -855,8 +899,7 @@ static int venc_hw_start(struct venc_ctx *ctx)
 			goto err_stop_hw;
 		}
 		memcpy(ctx->sps_pps,
-		       ctx->buf_vaddr + (ctx->mem.bitstream_start -
-					 ctx->buf_paddr),
+		       venc_stream_vaddr(ctx),
 		       ctx->sps_pps_size + pps);
 		ctx->sps_pps_size += pps;
 		ctx->sps_pps_valid = true;
@@ -883,9 +926,7 @@ err_firmware:
 	release_firmware(ctx->fw);
 	ctx->fw = NULL;
 err_free:
-	dma_free_coherent(core->dev, VENC_BUF_SIZE, ctx->buf_vaddr,
-			  ctx->buf_paddr);
-	ctx->buf_vaddr = NULL;
+	venc_free_buffers(ctx);
 	return ret;
 }
 
@@ -904,9 +945,7 @@ static void venc_session_release(struct venc_ctx *ctx)
 	ctx->sps_pps_valid = false;
 	release_firmware(ctx->fw);
 	ctx->fw = NULL;
-	dma_free_coherent(core->dev, VENC_BUF_SIZE, ctx->buf_vaddr,
-			  ctx->buf_paddr);
-	ctx->buf_vaddr = NULL;
+	venc_free_buffers(ctx);
 	core->running = false;
 }
 
@@ -970,7 +1009,7 @@ static void venc_stage_input(struct venc_ctx *ctx, struct vb2_buffer *b)
 	u32 ps_y = ALIGN(ctx->height, 16);
 	u32 cw = venc_in_canvas_w(ctx->src_fmt, ctx->width);
 	u32 bpl = ALIGN(ctx->width, 32);
-	u8 *dst = ctx->buf_vaddr;
+	u8 *dst = ctx->buffers[VENC_INPUT].vaddr;
 	unsigned long plane_sz;
 	u8 *src;
 	u32 i;
@@ -981,7 +1020,7 @@ static void venc_stage_input(struct venc_ctx *ctx, struct vb2_buffer *b)
 
 	if (ctx->src_fmt == V4L2_PIX_FMT_YUV420M) {
 		/* U at cw*ps_y, V at cw*ps_y*5/4, stride cw/2 */
-		dst = ctx->buf_vaddr + cw * ps_y;
+		dst = ctx->buffers[VENC_INPUT].vaddr + cw * ps_y;
 		for (i = 1; i <= 2; i++, dst += cw * ps_y / 4) {
 			plane_sz = vb2_plane_size(b, i);
 			src = vb2_plane_vaddr(b, i);
@@ -993,7 +1032,7 @@ static void venc_stage_input(struct venc_ctx *ctx, struct vb2_buffer *b)
 		 * NV12/NV21 interleaved chroma at cw*ps_y:
 		 * w/2 U + w/2 V samples = width bytes per row.
 		 */
-		dst = ctx->buf_vaddr + cw * ps_y;
+		dst = ctx->buffers[VENC_INPUT].vaddr + cw * ps_y;
 		plane_sz = vb2_plane_size(b, 1);
 		src = vb2_plane_vaddr(b, 1);
 		venc_copy_rows(dst, cw, src, bpl, ctx->width, ctx->height / 2,
@@ -1063,13 +1102,11 @@ static int venc_encode_frame(struct venc_ctx *ctx, struct vb2_buffer *src,
 		memcpy(vb2_plane_vaddr(dst, 0), ctx->sps_pps, hdr);
 		es_size = min(es_size, (u32)vb2_plane_size(dst, 0) - hdr);
 		memcpy(vb2_plane_vaddr(dst, 0) + hdr,
-		       ctx->buf_vaddr + (ctx->mem.bitstream_start -
-					 ctx->buf_paddr), es_size);
+		       venc_stream_vaddr(ctx), es_size);
 		vb2_set_plane_payload(dst, 0, hdr + es_size);
 	} else {
 		memcpy(vb2_plane_vaddr(dst, 0),
-		       ctx->buf_vaddr + (ctx->mem.bitstream_start -
-					 ctx->buf_paddr), es_size);
+		       venc_stream_vaddr(ctx), es_size);
 		vb2_set_plane_payload(dst, 0, es_size);
 	}
 
@@ -1089,7 +1126,7 @@ static int venc_encode_jpeg(struct venc_ctx *ctx, struct vb2_buffer *src,
 			    struct vb2_buffer *dst)
 {
 	struct venc_core *core = ctx->core;
-	u8 *stream = ctx->buf_vaddr + ctx->mem.bitstream_start - ctx->buf_paddr;
+	u8 *stream = venc_stream_vaddr(ctx);
 	u32 size, ptr;
 	int ret;
 
@@ -1331,6 +1368,9 @@ static void venc_work(struct work_struct *work)
 		ret = venc_hw_start(ctx);
 		if (ret) {
 			dev_err(core->dev, "session start failed (%d)\n", ret);
+			/* Allocation/firmware failure is terminal for these queues. */
+			vb2_queue_error(v4l2_m2m_get_src_vq(m2m_ctx));
+			vb2_queue_error(v4l2_m2m_get_dst_vq(m2m_ctx));
 			state = VB2_BUF_STATE_ERROR;
 			goto out;
 		}
@@ -1741,24 +1781,23 @@ static int venc_probe(struct platform_device *pdev)
 	mutex_init(&core->lock);
 
 	r = platform_get_resource_byname(pdev, IORESOURCE_MEM, "dos");
-	core->dos_base = devm_ioremap_resource(dev, r);
-	if (IS_ERR(core->dos_base))
-		return PTR_ERR(core->dos_base);
+	if (!r || r->start != 0xd0050000 || resource_size(r) != SZ_64K)
+		return -EINVAL;
+	core->dos_base = meson8b_runtime_dos_base();
 
 	/*
-	 * The two AO windows hold only the registers this driver touches
-	 * (PWR_CNTL at +0x10, SLEEP0/ISO0 at +0xe8/+0xec); mapping the
-	 * whole aobus would collide with the pinctrl/serial drivers.
+	 * Only PWR_CNTL needs a dedicated mapping. Sleep/isolation share
+	 * the decoder's PMU regmap and its atomic masked updates.
 	 */
 	r = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ao-pwr");
 	core->ao_pwr_base = devm_ioremap_resource(dev, r);
 	if (IS_ERR(core->ao_pwr_base))
 		return PTR_ERR(core->ao_pwr_base);
 
-	r = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ao-sleep");
-	core->ao_sleep_base = devm_ioremap_resource(dev, r);
-	if (IS_ERR(core->ao_sleep_base))
-		return PTR_ERR(core->ao_sleep_base);
+	core->regmap_ao = syscon_regmap_lookup_by_phandle(dev->of_node,
+						       "amlogic,ao-sysctrl");
+	if (IS_ERR(core->regmap_ao))
+		return PTR_ERR(core->regmap_ao);
 
 	core->dos_clk = devm_clk_get(dev, "dos");
 	if (IS_ERR(core->dos_clk))

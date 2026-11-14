@@ -26,6 +26,7 @@
                 interrupt-names = "venc";
                 clocks = <3 17>, <3 199>;
                 clock-names = "dos", "vdec_hcodec";
+                amlogic,ao-sysctrl = <7>;
                 amlogic,canvas = <49>;
                 status = "okay";
             };

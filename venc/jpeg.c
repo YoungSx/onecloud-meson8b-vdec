@@ -48,8 +48,7 @@ void venc_jpeg_init(struct venc_ctx *ctx)
 	venc_write(core, QDCT_MB_CONTROL, BIT(9) | BIT(0));
 	venc_write(core, QDCT_MB_CONTROL, BIT(13) | BIT(12));
 
-	venc_jpeg_header(ctx->buf_vaddr + ctx->mem.bitstream_start -
-			 ctx->buf_paddr, ctx->width, ctx->height, quant);
+	venc_jpeg_header(venc_stream_vaddr(ctx), ctx->width, ctx->height, quant);
 	/* JPEG microcode uses scratch 1 as header size, not AVC workspace. */
 	venc_write(core, HENC_SCRATCH_1, VENC_JPEG_HEADER_SIZE);
 	venc_write(core, VLC_TOTAL_BYTES, 0);
