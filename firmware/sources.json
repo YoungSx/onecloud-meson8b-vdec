@@ -80,5 +80,13 @@
     "sha256": "d3af80d6c0fd444c82589a932523056a6c3af3fe51bbb27ccf2e18b6559d7e2b",
     "output_sha256": "1542e1c65fdfdcfd86364a932473e1d887ae15b514f4b41999141b84dbd6dd6f",
     "sentinel": false
+  },
+  "hevc": {
+    "path": "drivers/amlogic/amports/m8/ucode/h265/vh265_mc.c",
+    "array": "vh265_mc",
+    "words": 3376,
+    "sha256": "e442a7953c617407107ed65bd8bdd9e1ffe8eb49597a3cb3b54ab9173fd691b2",
+    "output_sha256": "4bc8cc39437bab0cd146fec4a7d76cb068ba123c22060d56bca3f85360565d55",
+    "sentinel": false
   }
 }

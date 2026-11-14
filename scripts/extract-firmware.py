@@ -117,6 +117,12 @@ def main():
         raise ValueError("JPEG encoder firmware output checksum or layout mismatch")
     outputs.append((blob, ROOT / "firmware/meson/venc/meson8b_jpeg_enc.bin"))
 
+    hevc = manifest["hevc"]
+    blob = _load_vendor(hevc, manifest["commit"]).ljust(16 * 1024, b"\0")
+    if hashlib.sha256(blob).hexdigest() != hevc["output_sha256"]:
+        raise ValueError("HEVC firmware output checksum or layout mismatch")
+    outputs.append((blob, ROOT / "firmware/meson/vdec/meson8b_hevc.bin"))
+
     for blob, out in outputs:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(blob)
