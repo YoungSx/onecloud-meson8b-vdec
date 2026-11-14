@@ -60,3 +60,10 @@ The old recovery failure is hevc-recovery-interim-failure.log; final recovery
 and independent-tool checks are hevc-recovery.log and reviewed-validation.log.
 final-install.log/installed-hevc.md5 describe the superseded b8263f6 package;
 verified-deployment.log and verified-*.md5 describe the final bd1cb79 payload.
+
+Final source companion: build/onecloud-verified-source.tar.gz (136 MiB),
+SHA-256 afd36fc89007b9a3793cc91cc8ba4207151c355b9634c47f3ad369d4cca1cb1a.
+It contains exact bd1cb79 payload sources and a supplement from
+15e4460769514a294b27bad5fcb5d420318e6109, including Linux/FFmpeg/v4l-utils
+source archives, pinned microcode sources, reproduction scripts and evidence.
+Its complete manifest was checked directly from the final archive.

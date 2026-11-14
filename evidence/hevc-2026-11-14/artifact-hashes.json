@@ -8,5 +8,7 @@
     "meson-vdec.ko": "1c47538fe47c7ef75f979bbfc65bda4e28e0f311b065b164b430ec117b8c7dba",
     "meson-venc.ko": "77af6e8aed81525f600aeaa2ff04468f29391b1d21822fba7d7d647e7122ce89"
   },
-  "v4l2_ctl_sha256": "f3da4476a5afcb072bf7e8ade315cd3b6a581404e7ec9291679b0d2cd79f3df6"
+  "v4l2_ctl_sha256": "f3da4476a5afcb072bf7e8ade315cd3b6a581404e7ec9291679b0d2cd79f3df6",
+  "source_companion_sha256": "afd36fc89007b9a3793cc91cc8ba4207151c355b9634c47f3ad369d4cca1cb1a",
+  "source_companion_supplement_commit": "15e4460769514a294b27bad5fcb5d420318e6109"
 }
