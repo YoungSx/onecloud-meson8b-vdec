@@ -1,3 +1,5 @@
+> 2026-11-14：本文件为可行性来源记录；HEVC Main 8-bit 实现已完成并实测，当前验收见 `evidence/HEVC-ACCEPTANCE-2026-11-14.md`。
+
 # Meson8b HEVC feasibility, corrected 2026-11-14
 
 S805/Meson8b has a dedicated HEVC decode block in the pinned vendor source.

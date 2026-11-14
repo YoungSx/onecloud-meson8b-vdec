@@ -21,6 +21,11 @@ install -m 644 "$root/README.md" "$dest/README.md"
 install -m 644 "$root/LICENSE" "$dest/LICENSE"
 cp -a "$root/patches" "$dest/patches"
 cp -a "$root/config" "$dest/config"
+if [[ -x "$root/build/ffmpeg-test/ffmpeg" && -x "$root/build/ffmpeg-test/ffprobe" ]]; then
+    mkdir "$dest/tools"
+    install -m 755 "$root/build/ffmpeg-test/ffmpeg" "$root/build/ffmpeg-test/ffprobe" "$dest/tools/"
+    install -m 644 "$root/sources/ffmpeg/ffmpeg-7.0.2/COPYING.LGPLv2.1" "$dest/tools/"
+fi
 python3 - "$root/meson8b-runtime.dts" "$dest/TARGET_PROVIDERS.json" <<'PYCODE'
 import json,re,sys
 from pathlib import Path

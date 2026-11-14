@@ -32,7 +32,7 @@ H.264 encoder）三项全部完成**：1080p V4L2 M2M 编码可用（ffmpeg
    （延迟 work 等待在途图片，空 LAST 帧 + EOS 事件）。1080p30 MPEG-2：
    0.60s CPU vs 4.42s 软解（-86%），H.264 300 帧 framemd5 回归一致。
    HEVC 不走 VDEC1；旧“无 HEVC 核”判断已被固定厂商源码证伪。
-   Meson8b 有独立 HEVC 解码块，V4L2 codec 尚未移植，见 P6-22。
+   Meson8b 有独立 HEVC 解码块，V4L2 codec 已完成，见最终补全和 HEVC 验收。
 
 ## P3 — 编码（amvenc_avc 移植，验收 5）
 
@@ -93,7 +93,7 @@ H.264 encoder）三项全部完成**：1080p V4L2 M2M 编码可用（ffmpeg
     V4L2_PIX_FMT_AVS，ffmpeg 亦无 v4l2m2m 包装，集成层无落点。
     WMV3（simple/main）未选通：fate 无样片，留待有需求时翻转
     AV_SCRATCH_4 并补验收。H.263 N/A（h263_mc 在厂商树中未定义）、
-    HEVC 仍待独立移植（旧无核结论更正，见 P6-22）；encoder 多会话 N/A。
+    HEVC 已完成 Main 8-bit 移植（见最终补全）；encoder 多会话 N/A。
     数据见 `evidence/RC-VC1-ACCEPTANCE-2026-11-13.md`。
 
 ## P6 — 能力扩展（2026-11-14 新增，按推荐优先级）
@@ -124,12 +124,12 @@ H.264 encoder）三项全部完成**：1080p V4L2 M2M 编码可用（ffmpeg
 21. ~~硬解→硬编转码管线~~：完成。共享 DOS 映射和控制寄存器锁、
     同一 PMU regmap、编码 DMA 分区；720p 与 1080p Baseline 60 帧
     可播，1080p 连续五轮，PSNR 平均 45.41 dB，独立硬解 MD5 60/60。
-    1080p B 帧并发仍受 64 MiB CMA 预算限制，不宣称支持。见
+    1080p B 帧并发限制已修复，当前验收见 BFRAME-TRANSCODE 记录。历史依据见
     `evidence/P6-TRANSCODE-ACCEPTANCE-2026-11-14.md`。
 22. ~~HEVC 可行性核查~~：完成。固定厂商源码明确 `HAS_HEVC_VDEC=1`，
     Meson8b 有独立 HEVC 核、1080p 上限；旧 N/A 结论错误。寄存器、
     微码、时钟和移植缺口见 `docs/hevc-feasibility.md`。HEVC V4L2
-    解码实现与实机验收尚未完成，不宣称可用。
+    Main 8-bit 实现和实机验收已完成，见最终补全。
 
 ## P5 — 上游化（可选，长期）
 
@@ -148,3 +148,12 @@ H.264 encoder）三项全部完成**：1080p V4L2 M2M 编码可用（ffmpeg
 - 目标机是在役生产机：所有验证用单会话回退路径；kill -9 残留会话后需
   rmmod+等待+重载两模块清 VDEC 状态（观测到的 abort 洪泛属此情况）。
 - 测量必须无值守（nohup）：管理 SSH 经 DERP 中继污染 CPU 数据。
+
+## 2026-11-14 最终补全
+
+- HEVC Main 8-bit 驱动与固定微码完成：320×240、854×480 crop、1080p B 帧逐帧精确匹配，重复会话、损坏流 watchdog 和固件恢复验证。
+- 1080p H.264 B 帧并发完成：原始输入 DMA 按格式尺寸分配，EOS batch 按 PTS 排序，60 帧 PSNR 最低 45.03 dB；十轮混合负载全部完整输出。
+- JPEG 长时完成：3×300 1080p 图像，全部可软解播放；避免在 tmpfs 保留 900 帧原始参考。
+- 自动加载与失败回滚完成：systemd 启停、故障加载卸载、恢复与移除均实测。
+- RFC 草稿和 additive 内核补丁更新；尚未向 linux-media 发送，也未宣称上游合入。
+- OpenList、Arcane 原容器恢复；最终五项服务在线。原内核与 /boot 未改变。

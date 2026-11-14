@@ -19,8 +19,8 @@ ffmpeg -nostdin -c:v h264_v4l2m2m -num_capture_buffers 7 -i input.mp4 \
 45.41 dB，详见 `evidence/P6-TRANSCODE-ACCEPTANCE-2026-11-14.md`。
 
 缓冲数量必须服从流的 `MIN_BUFFERS_FOR_CAPTURE`。7 只适用于已验证的
-Baseline 单参考帧样片。带 B 帧/更多参考帧的 1080p 并发会超过本机 64 MiB
-CMA 的可用预算，不能套这个数量来绕过要求。失败必须检查日志与输出帧数；
+Baseline 单参考帧样片。已验证的四参考帧、bframes=2 1080p 输入使用 10 个 CAPTURE 缓冲；
+原 64 MiB CMA 下已完成十轮转码，不能把 7 套到该流。失败必须检查日志与输出帧数；
 部分 ffmpeg 队列错误可能以成功退出但空输出结束。测试命令用
 `timeout -k 5 60`，不会依赖 ffmpeg 自己从死锁中退出。
 
@@ -63,3 +63,15 @@ OpenList 的入库文件可用外部脚本预转码，再让文件服务索引�
 结束所有客户端后依次执行 `rmmod meson_venc`、`rmmod meson_vdec`、
 `rmmod meson8b_runtime`，恢复被覆盖的固件/overlay 文件。三模块完整卸载已
 实测，DOS 资源和 video 节点都撤销，原启动路径保持原状。
+
+## HEVC 与自动加载
+
+HEVC Main 8-bit 可用，1080p B 帧和 854×480 crop 已逐帧匹配。原 ffmpeg
+不含 HEVC M2M decoder，用独立包的 tools/ffmpeg（含 V4L2 drain 修复）：
+
+```sh
+runtime-package/tools/ffmpeg -c:v hevc_v4l2m2m -num_capture_buffers 8 -i input.mp4 -f null -
+```
+
+systemd unit 与可回滚安装/移除脚本见 README。启停和不匹配 overlay 的失败
+卸载已实测。OpenList、Arcane 原容器恢复运行并纳入最终服务检查。

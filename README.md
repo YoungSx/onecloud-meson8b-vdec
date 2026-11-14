@@ -16,13 +16,13 @@ V4L2 Memory-to-Memory 编解码设备。使用原内核的设备树 overlay、ca
 | 解码 | H.264、MPEG-1/2、MPEG-4 Part 2、VC-1 advanced、MJPEG；各 codec 的帧尾/色度限制见验收记录 |
 | H.264 编码 | `ffmpeg -c:v h264_v4l2m2m`，NV12/NV21/YUV420 输入；固定 QP 26 或非零 bitrate 开启软件 CBR；无 B 帧编码 |
 | JPEG 编码 | 标准 V4L2 JPEG CAPTURE，质量 1–100；输入为全量程 YCbCr；ffmpeg 7.0.2 没有 JPEG v4l2m2m 编码包装，使用 V4L2 客户端 |
-| 并发转码 | 一个解码会话 + 一个编码会话；720p、1080p Baseline 已验证；1080p B 帧并发受 64 MiB CMA 预算限制 |
-| HEVC | 固定厂商源码证实 Meson8b 有独立 HEVC 核；本仓库尚未实现 HEVC codec，也未做硬解验收 |
+| 并发转码 | 一个解码会话 + 一个编码会话；720p、1080p Baseline 已验证；1080p B 帧并发已通过原 64 MiB CMA 预算验证 |
+| HEVC | Main 8-bit 硬解，320×240、854×480 裁剪、1080p B 帧逐帧精确匹配；Main10/tiles 不支持 |
 
-仍有 CPU 字节序转换与编码输入拷贝，不声称端到端零拷贝。长时 JPEG、任意
-参考帧数的 1080p 并发及 HEVC 未验证。2026-11-14 服务基线中 SublinkPro、
-VoCat、Home Assistant 正常并保持运行；OpenList、Arcane 已不在运行列表，
-本轮不能替它们声称验收通过。
+仍有 CPU 字节序转换与编码输入拷贝，不声称端到端零拷贝。900 帧 JPEG、十轮 B 帧并发和重复 HEVC 已验证；任意
+参考帧数与超出 Main 8-bit 的 HEVC 内容仍不在验收范围。2026-11-14 服务基线中 SublinkPro、
+VoCat、Home Assistant 正常并保持运行；OpenList、Arcane 原容器已恢复运行，
+最终五项服务均已验证。
 
 ## 架构
 
@@ -92,7 +92,7 @@ rmmod meson8b_runtime
 ```
 
 完整卸载已验证：codec 节点、DOS 占用和 overlay 都消失，服务保持运行。
-不自动建立开机加载单元。`scripts/jpeg-matrix.sh`、`scripts/transcode-smoke.sh`
+`systemd/meson8b-vcodec.service` 提供可回滚自动加载；启停与失败卸载已实测。`scripts/jpeg-matrix.sh`、`scripts/transcode-smoke.sh`
 和 `scripts/transcode-stress.py` 是 `/root/venc-deploy` 的实机测试脚本；短时
 看门狗护栏和进程 kill deadline 用于 bring-up，不是服务启动机制。
 
@@ -100,7 +100,7 @@ rmmod meson8b_runtime
 
 - `evidence/P6-JPEG-ENCODE-ACCEPTANCE-2026-11-14.md`：JPEG/AVC 回归、固件错误恢复。
 - `evidence/P6-TRANSCODE-ACCEPTANCE-2026-11-14.md`：并发修复、五轮压测、CMA 边界。
-- `docs/hevc-feasibility.md`：纠正无 HEVC 核结论，列出固定源码证据和待移植部分。
+- `docs/hevc-feasibility.md`：固定源码硬件证据；当前实现验收见 `evidence/HEVC-ACCEPTANCE-2026-11-14.md`。
 - `ROADMAP.md`：已完成任务及长期可选项。RFC 上游化与自动加载不是当前交付。
 
 GPL-2.0 / GPL-2.0+，以各文件 SPDX 为准。微码来源许可和提取元数据见
@@ -141,3 +141,24 @@ make -C /path/to/kernel-output ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- \
 补丁 `--fuzz=0` 应用、新增目录 Kbuild 交叉编译和 Kconfig 选通已核验，日志在
 `evidence/kernel-patch-2026-11-14/`。未为此重编或启动新内核；实机使用的是
 相同源码的外部模块。源码改动后可用 `scripts/export-kernel-patch.py` 重导出。
+
+## 自动加载与 HEVC 测试工具
+
+```sh
+# 原启动内核不变；使用独立包建立可回滚开机加载
+sudo bash runtime-package/scripts/install-autoload.sh runtime-package /root/new-codec-state
+# 卸载单元、模块并恢复原固件
+sudo bash runtime-package/scripts/remove-autoload.sh
+```
+
+自动加载启停、平台 probe 失败卸载和完整移除已在目标机测试，未为测试重启。
+最终安装保留可用设备；停止该 unit 就会卸载 codec，客户端须先退出。
+目标原 ffmpeg 未编入 hevc_v4l2m2m，交付的独立 `tools/ffmpeg` 含该包装器及
+V4L2 drain 修复，原 `/usr/local/bin/ffmpeg` 保留。用法：
+
+```sh
+runtime-package/tools/ffmpeg -c:v hevc_v4l2m2m -num_capture_buffers 8 -i input.mp4 -f null -
+```
+
+该测试工具只启用文件协议及验收所需功能，不能替代完整生产 ffmpeg。
+构建复现见 scripts/build-ffmpeg-test.sh；补丁见 patches/ffmpeg-7.0.2-v4l2-drain.patch。
