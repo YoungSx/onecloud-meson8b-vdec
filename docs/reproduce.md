@@ -71,3 +71,9 @@ SPS 主机测试所需的 1080p 裸流。用 `scripts/verify-hashes.py` 比对�
 构建、模块安装、framehash 内容、错误恢复、systemd 启停和完整卸载均有
 日志；未重启、新启动内核与当前主线端口未验证。Linux-media RFC 为本地
 草稿。原始启动文件保留，回滚恢复安装前固件快照并撤销三个模块及 unit。
+
+2026-11-14 干净源码复现已通过：原配置的 `vmlinux modules` 完整构建、
+外部 codec MODPOST 依赖检查、当前 additive 补丁无 fuzz 应用及新增目录
+Kbuild。日志为 `evidence/hevc-2026-11-14/reproduced-*.log`。三个外部模块
+SHA-256 均与已安装版本一致。原基线 DRM 中有两处未使用函数警告，codec
+MODPOST 没有未解析符号。复现产物未替换目标机已验收的二进制。
