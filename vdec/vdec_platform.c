@@ -16,9 +16,22 @@
 #include "codec_vc1.h"
 #include "codec_mjpeg.h"
 #include "codec_h264.h"
+#include "codec_hevc.h"
 #include "codec_vp9.h"
 
 static const struct amvdec_format vdec_formats_meson8b[] = {
+	{
+		.pixfmt = V4L2_PIX_FMT_HEVC,
+		.min_buffers = 6,
+		.max_buffers = 12,
+		.max_width = 1920,
+		.max_height = 1088,
+		.vdec_ops = &vdec_hevc_ops,
+		.codec_ops = &codec_hevc_ops,
+		.firmware_path = "meson/vdec/meson8b_hevc.bin",
+		.pixfmts_cap = { V4L2_PIX_FMT_NV12M, 0 },
+		.flags = V4L2_FMT_FLAG_COMPRESSED | V4L2_FMT_FLAG_DYN_RESOLUTION,
+	},
 	{
 		.pixfmt = V4L2_PIX_FMT_H264,
 		.min_buffers = 2,
@@ -106,6 +119,7 @@ const struct vdec_platform vdec_platform_meson8b = {
 };
 
 MODULE_FIRMWARE("meson/vdec/meson8b_h264.bin");
+MODULE_FIRMWARE("meson/vdec/meson8b_hevc.bin");
 MODULE_FIRMWARE("meson/vdec/meson8b_mpeg12.bin");
 MODULE_FIRMWARE("meson/vdec/meson8b_mpeg4.bin");
 MODULE_FIRMWARE("meson/vdec/meson8b_vc1.bin");

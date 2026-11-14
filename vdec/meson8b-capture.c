@@ -88,6 +88,9 @@ int amvdec_meson8b_capture_addr(struct amvdec_session *sess,
 {
 	struct amvdec_shadow *shadow;
 	u32 luma = amvdec_get_output_size(sess);
+	if (sess->reference_width && sess->reference_height)
+		luma = ALIGN(ALIGN(sess->reference_width, 64) *
+			     ALIGN(sess->reference_height, 64), SZ_64K);
 
 	if (vb->index >= ARRAY_SIZE(sess->shadow) ||
 	    sess->pixfmt_cap != V4L2_PIX_FMT_NV12M)
@@ -121,8 +124,8 @@ int amvdec_meson8b_copy_capture(struct amvdec_session *sess,
 	shadow = &sess->shadow[vb->index];
 	if (!shadow->vaddr)
 		return -EINVAL;
-	size[0] = shadow->luma;
-	size[1] = shadow->luma / 2;
+	size[0] = amvdec_get_output_size(sess);
+	size[1] = size[0] / 2;
 	for (i = 0; i < 2; i++) {
 		dst[i] = vb2_plane_vaddr(vb, i);
 		if (!dst[i] || vb2_plane_size(vb, i) < size[i])
@@ -132,9 +135,32 @@ int amvdec_meson8b_copy_capture(struct amvdec_session *sess,
 	dma_sync_single_for_cpu(sess->core->dev, shadow->paddr, shadow->size,
 				DMA_FROM_DEVICE);
 	src = shadow->cached;
+	if (sess->reference_width &&
+	    (sess->crop_left || sess->crop_top ||
+	     ALIGN(sess->reference_width, 32) != ALIGN(sess->width, 32))) {
+		u32 src_stride = ALIGN(sess->reference_width, 32);
+		u32 dst_stride = ALIGN(sess->width, 32);
+		u32 plane, row, col;
+
+		for (plane = 0; plane < 2; plane++) {
+			u32 rows = plane ? sess->height / 2 : sess->height;
+			u32 top = plane ? sess->crop_top / 2 : sess->crop_top;
+			u32 base = plane ? shadow->luma : 0;
+			u8 *output = dst[plane];
+
+			memset(output, 0, size[plane]);
+			for (row = 0; row < rows; row++)
+				for (col = 0; col < sess->width; col++) {
+					u32 offset = base + (top + row) * src_stride +
+						sess->crop_left + col;
+					output[row * dst_stride + col] = src[offset ^ 7];
+				}
+		}
+		return 0;
+	}
 	if (meson8b_copy_swap64(dst[0], src, size[0]))
 		return -EINVAL;
-	src += size[0];
+	src += shadow->luma;
 
 	if (sess->fmt_out->pixfmt != V4L2_PIX_FMT_MJPEG) {
 		if (meson8b_copy_swap64(dst[1], src, size[1]))

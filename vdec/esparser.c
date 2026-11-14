@@ -254,6 +254,11 @@ int esparser_queue_eos(struct amvdec_core *core, const u8 *data, u32 len)
 		return -ENOMEM;
 
 	memcpy(eos_vaddr, data, len);
+	if (esparser_pad_buffer(eos_vaddr, len, len + SEARCH_PATTERN_LEN) < 0) {
+		dma_free_coherent(dev, len + SEARCH_PATTERN_LEN, eos_vaddr, eos_paddr);
+		return -EINVAL;
+	}
+	dma_wmb();
 	ret = esparser_write_data(core, eos_paddr, len);
 	dma_free_coherent(dev, len + SEARCH_PATTERN_LEN,
 			  eos_vaddr, eos_paddr);
@@ -313,6 +318,11 @@ esparser_queue(struct amvdec_session *sess, struct vb2_v4l2_buffer *vbuf)
 	}
 
 	v4l2_m2m_src_buf_remove_by_buf(sess->m2m_ctx, vbuf);
+	if (codec_ops->inspect_input && codec_ops->inspect_input(sess, vb)) {
+		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
+		amvdec_abort(sess);
+		return 0;
+	}
 
 	offset = esparser_get_offset(sess);
 

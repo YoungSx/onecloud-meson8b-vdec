@@ -101,8 +101,11 @@ static int vdec_poweron(struct amvdec_session *sess)
 		goto disable_dos_parser;
 
 	ret = vdec_ops->start(sess);
-	if (ret)
+	if (ret) {
+		vb2_queue_error(v4l2_m2m_get_src_vq(sess->m2m_ctx));
+		vb2_queue_error(v4l2_m2m_get_dst_vq(sess->m2m_ctx));
 		goto disable_dos;
+	}
 
 	esparser_power_up(sess);
 
@@ -285,7 +288,12 @@ static void vdec_vb2_buf_queue(struct vb2_buffer *vb)
 	struct amvdec_session *sess = vb2_get_drv_priv(vb->vb2_queue);
 	struct v4l2_m2m_ctx *m2m_ctx = sess->m2m_ctx;
 
+	if (V4L2_TYPE_IS_CAPTURE(vb->type) && sess->fmt_out->codec_ops->hold_capture_buf &&
+	    sess->fmt_out->codec_ops->hold_capture_buf(sess, vbuf))
+		return;
 	v4l2_m2m_buf_queue(m2m_ctx, vbuf);
+	if (V4L2_TYPE_IS_CAPTURE(vb->type) && sess->fmt_out->codec_ops->capture_queued)
+		sess->fmt_out->codec_ops->capture_queued(sess);
 
 	if (!sess->streamon_out)
 		return;
@@ -559,12 +567,27 @@ static int vdec_vb2_buf_prepare(struct vb2_buffer *vb)
 	return 0;
 }
 
+static void vdec_vb2_buf_finish(struct vb2_buffer *vb)
+{
+	struct amvdec_session *sess = vb2_get_drv_priv(vb->vb2_queue);
+	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
+	static const struct v4l2_event eos = { .type = V4L2_EVENT_EOS };
+
+	/* Publish EOS after userspace consumes LAST, preserving queued pictures
+	 * for clients that stop reading immediately upon the event.
+	 */
+	if (V4L2_TYPE_IS_CAPTURE(vb->type) && sess->fmt_out->codec_ops->firmware_eos &&
+	    (vbuf->flags & V4L2_BUF_FLAG_LAST))
+		v4l2_event_queue_fh(&sess->fh, &eos);
+}
+
 static const struct vb2_ops vdec_vb2_ops = {
 	.queue_setup = vdec_queue_setup,
 	.start_streaming = vdec_start_streaming,
 	.stop_streaming = vdec_stop_streaming,
 	.buf_queue = vdec_vb2_buf_queue,
 	.buf_prepare = vdec_vb2_buf_prepare,
+	.buf_finish = vdec_vb2_buf_finish,
 	.wait_prepare = vb2_ops_wait_prepare,
 	.wait_finish = vb2_ops_wait_finish,
 };
@@ -877,9 +900,10 @@ vdec_decoder_cmd(struct file *file, void *fh, struct v4l2_decoder_cmd *cmd)
 		}
 	}
 
-	sess->should_stop = 1;
-
-	v4l2_m2m_mark_stopped(sess->m2m_ctx);
+	if (!codec_ops->firmware_eos) {
+		sess->should_stop = 1;
+		v4l2_m2m_mark_stopped(sess->m2m_ctx);
+	}
 
 	if (codec_ops->drain) {
 		vdec_wait_inactive(sess);
@@ -1211,10 +1235,13 @@ static int vdec_probe(struct platform_device *pdev)
 	if (IS_ERR(core->vdec_1_clk))
 		return -EPROBE_DEFER;
 
-	if (core->platform->revision != VDEC_REVISION_MESON8B) {
-		core->vdec_hevc_clk = devm_clk_get(dev, "vdec_hevc");
-		if (IS_ERR(core->vdec_hevc_clk))
-			return PTR_ERR(core->vdec_hevc_clk);
+	core->vdec_hevc_clk = devm_clk_get(dev, "vdec_hevc");
+	if (IS_ERR(core->vdec_hevc_clk))
+		return PTR_ERR(core->vdec_hevc_clk);
+	if (core->platform->revision == VDEC_REVISION_MESON8B) {
+		core->hevc_parent_clk = devm_clk_get(dev, "hevc_parent");
+		if (IS_ERR(core->hevc_parent_clk))
+			return PTR_ERR(core->hevc_parent_clk);
 	}
 
 	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));

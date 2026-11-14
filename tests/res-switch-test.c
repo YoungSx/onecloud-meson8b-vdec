@@ -270,9 +270,15 @@ int main(int argc, char **argv)
 				sc3 = 1;
 				if (scan >= 4 && esbuf[scan - 3] == 0)
 					sc3 = 0; /* 4-byte start code */
-				nal = esbuf[scan + 1] & 0x1f;
-				if (nal != 1 && nal != 5 && nal != 7)
-					continue;
+				if (out_fourcc == V4L2_PIX_FMT_HEVC) {
+					nal = (esbuf[scan + 1] >> 1) & 0x3f;
+					if (nal > 31 && nal != 32)
+						continue;
+				} else {
+					nal = esbuf[scan + 1] & 0x1f;
+					if (nal != 1 && nal != 5 && nal != 7)
+						continue;
+				}
 				next = scan - (sc3 ? 2 : 3);
 				break;
 			}

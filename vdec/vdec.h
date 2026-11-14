@@ -89,6 +89,7 @@ struct amvdec_core {
 	struct clk *dos_clk;
 	struct clk *vdec_1_clk;
 	struct clk *vdec_hevc_clk;
+	struct clk *hevc_parent_clk;
 	struct clk *vdec_hevcf_clk;
 
 	struct reset_control *esparser_reset;
@@ -140,6 +141,11 @@ struct amvdec_codec_ops {
 	int (*load_extended_firmware)(struct amvdec_session *sess,
 				      const u8 *data, u32 len);
 	u32 (*num_pending_bufs)(struct amvdec_session *sess);
+	bool (*hold_capture_buf)(struct amvdec_session *sess,
+				 struct vb2_v4l2_buffer *vb);
+	void (*capture_queued)(struct amvdec_session *sess);
+	int (*inspect_input)(struct amvdec_session *sess, struct vb2_buffer *vb);
+	bool firmware_eos;
 	int (*can_recycle)(struct amvdec_core *core);
 	void (*recycle)(struct amvdec_core *core, u32 buf_idx);
 	void (*drain)(struct amvdec_session *sess);
@@ -277,6 +283,8 @@ struct amvdec_session {
 	u32 wrap_count;
 	u32 fw_idx_to_vb2_idx[32];
 	struct amvdec_shadow shadow[32];
+	u32 reference_width, reference_height;
+	u32 crop_left, crop_top;
 
 	enum amvdec_status status;
 	void *priv;

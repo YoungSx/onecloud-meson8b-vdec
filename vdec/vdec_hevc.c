@@ -8,6 +8,8 @@
 
 #include <linux/firmware.h>
 #include <linux/clk.h>
+#include <linux/iopoll.h>
+#include "../runtime/meson8b-runtime.h"
 
 #include "vdec_1.h"
 #include "vdec_helpers.h"
@@ -29,10 +31,10 @@ static int vdec_hevc_load_firmware(struct amvdec_session *sess,
 	struct amvdec_core *core = sess->core;
 	struct device *dev = core->dev_dec;
 	const struct firmware *fw;
-	static void *mc_addr;
-	static dma_addr_t mc_addr_map;
+	void *mc_addr;
+	dma_addr_t mc_addr_map;
 	int ret;
-	u32 i = 100;
+	u32 status;
 
 	ret = request_firmware(&fw, fwname, dev);
 	if (ret < 0)  {
@@ -59,17 +61,17 @@ static int vdec_hevc_load_firmware(struct amvdec_session *sess,
 	amvdec_write_dos(core, HEVC_MPSR, 0);
 	amvdec_write_dos(core, HEVC_CPSR, 0);
 
+	dma_wmb();
 	amvdec_write_dos(core, HEVC_IMEM_DMA_ADR, mc_addr_map);
 	amvdec_write_dos(core, HEVC_IMEM_DMA_COUNT, MC_SIZE / 4);
 	amvdec_write_dos(core, HEVC_IMEM_DMA_CTRL, (0x8000 | (7 << 16)));
 
-	while (i && (readl(core->dos_base + HEVC_IMEM_DMA_CTRL) & 0x8000))
-		i--;
-
-	if (i == 0) {
-		dev_err(dev, "Firmware load fail (DMA hang?)\n");
-		ret = -ENODEV;
-	}
+	ret = read_poll_timeout(amvdec_read_dos, status, !(status & 0x8000),
+				10, 1000000, false, core, HEVC_IMEM_DMA_CTRL);
+	if (ret)
+		dev_err(dev, "HEVC firmware DMA timed out\n");
+	else
+		dev_info(dev, "loaded firmware %s (%zu bytes)\n", fwname, fw->size);
 
 	dma_free_coherent(core->dev, MC_SIZE, mc_addr, mc_addr_map);
 release_firmware:
@@ -96,7 +98,10 @@ static void vdec_hevc_conf_esparser(struct amvdec_session *sess)
 	struct amvdec_core *core = sess->core;
 
 	/* set vififo_vbuf_rp_sel=>vdec_hevc */
-	amvdec_write_dos(core, DOS_GEN_CTRL0, 3 << 1);
+	if (core->platform->revision == VDEC_REVISION_MESON8B)
+		meson8b_runtime_update_dos_bits(DOS_GEN_CTRL0, GENMASK(2, 1), 3 << 1);
+	else
+		amvdec_write_dos(core, DOS_GEN_CTRL0, 3 << 1);
 	amvdec_write_dos(core, HEVC_STREAM_CONTROL,
 			 amvdec_read_dos(core, HEVC_STREAM_CONTROL) | BIT(3));
 	amvdec_write_dos(core, HEVC_STREAM_CONTROL,
@@ -120,27 +125,37 @@ static int vdec_hevc_stop(struct amvdec_session *sess)
 	/* Disable firmware processor */
 	amvdec_write_dos(core, HEVC_MPSR, 0);
 
+	{
+		u32 status;
+
+		amvdec_write_dos(core, HEVC_CPSR, 0);
+		if (read_poll_timeout(amvdec_read_dos, status, !(status & 0x8000),
+				     10, 1000000, false, core, HEVC_IMEM_DMA_CTRL))
+			dev_warn(core->dev, "HEVC IMEM DMA busy at stop\n");
+		amvdec_write_dos(core, DOS_SW_RESET3, BIT(12) | BIT(11));
+		amvdec_write_dos(core, DOS_SW_RESET3, 0);
+	}
 	if (sess->priv)
 		codec_ops->stop(sess);
 
 	/* Enable VDEC_HEVC Isolation */
 	if (core->platform->revision == VDEC_REVISION_SM1)
-		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_ISO0,
+		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_ISO0 - core->platform->ao_sysctrl_offset,
 				   GEN_PWR_VDEC_HEVC_SM1,
 				   GEN_PWR_VDEC_HEVC_SM1);
 	else
-		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_ISO0,
+		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_ISO0 - core->platform->ao_sysctrl_offset,
 				   0xc00, 0xc00);
 
 	/* VDEC_HEVC Memories */
 	amvdec_write_dos(core, DOS_MEM_PD_HEVC, 0xffffffffUL);
 
 	if (core->platform->revision == VDEC_REVISION_SM1)
-		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0,
+		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0 - core->platform->ao_sysctrl_offset,
 				   GEN_PWR_VDEC_HEVC_SM1,
 				   GEN_PWR_VDEC_HEVC_SM1);
 	else
-		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0,
+		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0 - core->platform->ao_sysctrl_offset,
 				   GEN_PWR_VDEC_HEVC, GEN_PWR_VDEC_HEVC);
 
 	clk_disable_unprepare(core->vdec_hevc_clk);
@@ -165,7 +180,23 @@ static int vdec_hevc_start(struct amvdec_session *sess)
 			return ret;
 	}
 
-	clk_set_rate(core->vdec_hevc_clk, 666666666);
+	if (core->platform->revision == VDEC_REVISION_MESON8B) {
+		struct clk *gate = clk_get_parent(core->vdec_hevc_clk);
+		struct clk *divider = gate ? clk_get_parent(gate) : NULL;
+		struct clk *selector = divider ? clk_get_parent(divider) : NULL;
+
+		if (!selector)
+			return -EINVAL;
+		/* Select a fixed PLL output; never let rate rounding change MPLLs. */
+		ret = clk_set_parent(selector, core->hevc_parent_clk);
+		if (ret)
+			return ret;
+		ret = clk_set_rate(core->vdec_hevc_clk, 255000000);
+	} else {
+		ret = clk_set_rate(core->vdec_hevc_clk, 666666666);
+	}
+	if (ret)
+		return ret;
 	ret = clk_prepare_enable(core->vdec_hevc_clk);
 	if (ret) {
 		if (core->platform->revision == VDEC_REVISION_G12A ||
@@ -175,10 +206,10 @@ static int vdec_hevc_start(struct amvdec_session *sess)
 	}
 
 	if (core->platform->revision == VDEC_REVISION_SM1)
-		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0,
+		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0 - core->platform->ao_sysctrl_offset,
 				   GEN_PWR_VDEC_HEVC_SM1, 0);
 	else
-		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0,
+		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_SLEEP0 - core->platform->ao_sysctrl_offset,
 				   GEN_PWR_VDEC_HEVC, 0);
 	usleep_range(10, 20);
 
@@ -193,10 +224,10 @@ static int vdec_hevc_start(struct amvdec_session *sess)
 
 	/* Remove VDEC_HEVC Isolation */
 	if (core->platform->revision == VDEC_REVISION_SM1)
-		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_ISO0,
+		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_ISO0 - core->platform->ao_sysctrl_offset,
 				   GEN_PWR_VDEC_HEVC_SM1, 0);
 	else
-		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_ISO0,
+		regmap_update_bits(core->regmap_ao, AO_RTI_GEN_PWR_ISO0 - core->platform->ao_sysctrl_offset,
 				   0xc00, 0);
 
 	amvdec_write_dos(core, DOS_SW_RESET3, 0xffffffff);
