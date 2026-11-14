@@ -10,6 +10,12 @@ for module in runtime/meson8b-runtime.ko vdec/meson-vdec.ko venc/meson-venc.ko; 
     }
 done
 [[ -s "$root/firmware/meson/vdec/meson8b-runtime.dtbo" ]]
+if [[ -f "$root/SOURCE_COMMIT" ]]; then
+    source_commit=$(cat "$root/SOURCE_COMMIT")
+else
+    source_commit=$(git -C "$root" rev-parse HEAD)
+fi
+[[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid source commit' >&2; exit 1; }
 mkdir -p "$dest/modules" "$dest/firmware" "$dest/scripts"
 for module in runtime/meson8b-runtime.ko vdec/meson-vdec.ko venc/meson-venc.ko; do
     install -m 644 "$root/$module" "$dest/modules/"
@@ -36,7 +42,7 @@ values={k:int(re.search(p,s)[1]) for k,p in patterns.items()}
 Path(sys.argv[2]).write_text(json.dumps(values,indent=2)+'\n')
 PYCODE
 printf '%s\n' 5.15.79-meson > "$dest/KERNEL_RELEASE"
-git -C "$root" rev-parse HEAD > "$dest/SOURCE_COMMIT"
+printf '%s\n' "$source_commit" > "$dest/SOURCE_COMMIT"
 manifest=$(mktemp)
 trap 'rm -f "$manifest"' EXIT
 (cd "$dest"; find . -type f -printf '%P\0' | sort -z | xargs -0 sha256sum) > "$manifest"

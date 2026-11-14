@@ -19,6 +19,7 @@ mkdir -p "$dest/payload-source" "$dest/sources/ffmpeg" "$dest/sources/vendor" \
 git -C "$root" archive "$payload_commit" Makefile README.md LICENSE config \
   firmware meson8b-runtime.dts patches runtime scripts systemd tests vdec venc |
   tar -xf - -C "$dest/payload-source"
+printf '%s\n' "$payload_commit" > "$dest/payload-source/SOURCE_COMMIT"
 git -C "$root" archive HEAD baseline docs scripts evidence |
   tar -xf - -C "$dest/supplement"
 cp "$root/sources/ffmpeg/ffmpeg-7.0.2.tar.xz" "$dest/sources/ffmpeg/"
