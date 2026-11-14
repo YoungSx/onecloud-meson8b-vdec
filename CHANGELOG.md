@@ -5,6 +5,10 @@ pre-releases tied to the recorded OneCloud kernel and device-tree ABI.
 
 ## Unreleased
 
+No changes yet.
+
+## v0.1.0 — 2026-11-14 (pre-release)
+
 - Reorganize current installation, usage, architecture, build and validation
   guides; provide equivalent English and Simplified Chinese READMEs.
 - Add host tests, firmware reproduction, ARM cross-build and package validation
