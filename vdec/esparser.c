@@ -20,6 +20,7 @@
 #include "dos_regs.h"
 #include "esparser.h"
 #include "vdec_helpers.h"
+#include "esparser-padding.h"
 
 /* PARSER REGS (CBUS) */
 #define PARSER_CONTROL 0x00
@@ -186,30 +187,16 @@ static int vp9_update_header(struct amvdec_core *core, struct vb2_buffer *buf)
  * Also append a start code 000001ff at the end to trigger
  * the ESPARSER interrupt.
  */
-static u32 esparser_pad_start_code(struct amvdec_core *core,
+static int esparser_pad_start_code(struct amvdec_core *core,
 				   struct vb2_buffer *vb,
 				   u32 payload_size)
 {
-	u32 pad_size = 0;
 	u8 *vaddr = vb2_plane_vaddr(vb, 0);
+	int pad_size = esparser_pad_buffer(vaddr, payload_size, vb2_plane_size(vb, 0));
 
-	if (payload_size < ESPARSER_MIN_PACKET_SIZE) {
-		pad_size = ESPARSER_MIN_PACKET_SIZE - payload_size;
-		memset(vaddr + payload_size, 0, pad_size);
-	}
-
-	if ((payload_size + pad_size + SEARCH_PATTERN_LEN) >
-						vb2_plane_size(vb, 0)) {
-		dev_warn(core->dev, "%s: unable to pad start code (payload %u pad %u plane %zu)\n",
-			 __func__, payload_size, pad_size, vb2_plane_size(vb, 0));
-		return pad_size;
-	}
-
-	memset(vaddr + payload_size + pad_size, 0, SEARCH_PATTERN_LEN);
-	vaddr[payload_size + pad_size]     = 0x00;
-	vaddr[payload_size + pad_size + 1] = 0x00;
-	vaddr[payload_size + pad_size + 2] = 0x01;
-	vaddr[payload_size + pad_size + 3] = 0xff;
+	if (pad_size < 0)
+		dev_warn(core->dev, "%s: unable to pad start code (payload %u plane %lu)\n",
+			 __func__, payload_size, vb2_plane_size(vb, 0));
 
 	return pad_size;
 }
@@ -300,7 +287,7 @@ esparser_queue(struct amvdec_session *sess, struct vb2_v4l2_buffer *vbuf)
 	dma_addr_t phy = vb2_dma_contig_plane_dma_addr(vb, 0);
 	u32 num_dst_bufs = 0;
 	u32 offset;
-	u32 pad_size;
+	int pad_size;
 
 	/*
 	 * When max ref frame is held by VP9, this should be -= 3 to prevent a
@@ -355,6 +342,11 @@ esparser_queue(struct amvdec_session *sess, struct vb2_v4l2_buffer *vbuf)
 	}
 
 	pad_size = esparser_pad_start_code(core, vb, payload_size);
+	if (pad_size < 0) {
+		amvdec_remove_ts(sess, vb->timestamp);
+		v4l2_m2m_buf_done(vbuf, VB2_BUF_STATE_ERROR);
+		return 0;
+	}
 	ret = esparser_write_data(core, phy, payload_size + pad_size);
 
 	if (ret <= 0) {
