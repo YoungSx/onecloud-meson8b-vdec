@@ -1,86 +1,65 @@
-# WanOS/玩客云 V4L2 M2M 硬解使用指南（OpenList 场景）
+# WanOS V4L2 编解码使用
 
-目标机：OneCloud/玩客云，WanOS 0.3.427，内核 `5.15.79-meson`，
-ffmpeg 7.0.2（johnvansickle static，armhf）。硬解三件套部署方式见
-README「在目标机上部署」；本页只讲部署好之后怎么用。
+先按 README 加载 runtime、decoder、encoder 三模块；不改 WanOS 应用层。
+ffmpeg 的 v4l2m2m 列表只说明包装器已编译，实际驱动与格式用 QUERYCAP /
+ENUM_FMT 验证。`tests/probe-v4l2.c` 可交叉编译后枚举设备；目标机当前没有
+v4l2-ctl，也没有 ffprobe，产物在外部主机用 ffprobe 独立检查。
 
-## 前置状态
+## H.264 硬解到硬编
 
-```sh
-lsmod | grep -E "meson"          # meson8b-runtime, meson-vdec
-ls /dev/video0                   # 存在即 overlay 已生效
-ls /dev/video0                   # 存在即 overlay + 驱动已生效
-ffmpeg -hide_banner -decoders | grep v4l2m2m
-# v4l2m2m 条目静态编译于 ffmpeg，与模块无关；实际可用性以
-# 能否成功 STREAMON 为准（本驱动：h264 / mpeg1 / mpeg2）
-```
-
-固件需在 `/lib/firmware/meson/vdec/`：`meson8b_h264.bin`（36864 B）、
-`meson8b_mpeg12.bin`（16384 B）。
-
-## 何时用硬解、何时用软解
-
-实测（1080p30，无人值守 os.times 测量，3 次取中位）：
-
-| 场景 | 软解 CPU | 硬解 CPU | 降幅 |
-|------|---------|---------|------|
-| H.264 300 帧 | 14.6 s | 3.5 s | -76% |
-| MPEG-2 150 帧 | 4.42 s | 0.60 s | -86% |
-
-硬解省的是 ffmpeg 进程 CPU（解码线程交还硬件 + 影子帧拷贝）。注意两点：
-
-- 输出路径含内核态 CPU 字节序拷贝（`vdec/meson8b-capture.c`），已用
-  cached vmap 别名优化，但整机 wall time 仍受拷贝支配。
-- 同时只有一个解码会话（模块单 `core->cur_sess`）。OpenList 缩略图等
-  并发场景需加队列/锁，避免第二个会话挂起。
-
-## ffmpeg 命令
-
-**H.264 → 低分辨率转码（缩略图 / 预览）**：
+已验证的 1080p Baseline、单参考帧样片：
 
 ```sh
-ffmpeg -c:v h264_v4l2m2m -i input.mp4 \
-       -vf scale=640:-2 -c:v libx264 -preset veryfast -crf 28 \
-       -c:a aac -movflags +faststart output.mp4
+ffmpeg -nostdin -c:v h264_v4l2m2m -num_capture_buffers 7 -i input.mp4 \
+  -an -c:v h264_v4l2m2m -b:v 0 -fps_mode passthrough output.mp4
 ```
 
-`-c:v h264_v4l2m2m` 放在 `-i` 前面（解码端）。编码仍是 x264 软编
-（硬件编码 amvenc_avc 未移植，见 ROADMAP P3）；缩到 ≤480p 时软编开销
-可接受。
+`-i` 前的 `-c:v` 指定解码器，后面指定编码器。`-b:v 0` 固定 QP 26；非零
+`-b:v` 启用现有软件 CBR。五轮 60 帧 1080p 转码输出都可播放，PSNR 平均
+45.41 dB，详见 `evidence/P6-TRANSCODE-ACCEPTANCE-2026-11-14.md`。
 
-**MPEG-2（.ts 录制 / DVD 转 H.264**）：
+缓冲数量必须服从流的 `MIN_BUFFERS_FOR_CAPTURE`。7 只适用于已验证的
+Baseline 单参考帧样片。带 B 帧/更多参考帧的 1080p 并发会超过本机 64 MiB
+CMA 的可用预算，不能套这个数量来绕过要求。失败必须检查日志与输出帧数；
+部分 ffmpeg 队列错误可能以成功退出但空输出结束。测试命令用
+`timeout -k 5 60`，不会依赖 ffmpeg 自己从死锁中退出。
+
+若需缩图，可在两路间添加 `-vf scale=640:-2`；缩放由 CPU 完成。每次只启动
+一个解码与一个编码会话，应用侧排队执行。CPU 字节序转换与输入 staging
+仍存在，整个管线未实现零拷贝。
+
+## JPEG
+
+JPEG 通过 encoder 的 `V4L2_PIX_FMT_JPEG` CAPTURE 和
+`V4L2_CID_JPEG_COMPRESSION_QUALITY`（1–100）编码；ffmpeg 7.0.2 没有
+mjpeg_v4l2m2m 编码包装。可使用仓库 V4L2 验证客户端：
 
 ```sh
-ffmpeg -c:v mpeg2_v4l2m2m -i input.ts \
-       -c:v libx264 -preset veryfast -crf 26 -c:a copy output.mp4
+# 外部交叉构建；复制到目标运行
+arm-linux-gnueabihf-gcc-11 -O2 -Wall -Wextra -Werror -static \
+  tests/encode-test.c -o build/encode-test
+./encode-test /dev/video1 output.mjpg reference.nv12 1920 1080 5 NV12 90 JPEG
 ```
 
-**仅播放（不转码）**：
+客户端生成确定性全量程 YCbCr 源，验证时间戳、KEYFRAME、互斥和 EOS。
+应用送来的有限量程视频必须先转换到全量程 JPEG YCbCr。输出的 JFIF 头描述
+全量程；驱动不会替调用者自动改变样本。
+
+## MPEG 与 OpenList
+
+MPEG-2 硬解可与 H.264 编码搭配，但本轮并发验收集中在 H.264 输入：
 
 ```sh
-ffmpeg -c:v h264_v4l2m2m -i input.mp4 -f nut - | mpv -
+ffmpeg -c:v mpeg2_v4l2m2m -i input.ts -c:v h264_v4l2m2m -b:v 0 -c:a copy output.mp4
 ```
 
-## OpenList 集成方式
+OpenList 的入库文件可用外部脚本预转码，再让文件服务索引产物。具体应用
+集成需遵循当前部署的接口，不用修改 OpenList/WanOS 核心。
+此前 OpenList/Arcane 服务验收记录是历史状态；2026-11-14 运行基线中未见
+这两个进程/容器，不能认为当前转码链已经接入它们。
 
-OpenList v4.2.9 本体不带视频转码（文件列表 + 直链下载/代理）。在
-WanOS 上让链路吃到硬解的三种做法：
+## 卸载
 
-1. **预转码（推荐）**：入库/整理阶段批量转好低码率版本，OpenList 只
-   索引文件。上面两条命令套 shell 循环即可；无人值守批量跑时用
-   `nice -n 19` 限制对在役服务的影响。
-2. **外挂流媒体服务**：OpenList 挂载存储目录给 jellyfin/emby（均支持
-   ffmpeg 参数覆盖，把解码器指到 `h264_v4l2m2m`）。单会话限制依旧，
-   建议 `transcoding thread count = 1`。
-3. **直链 + 本地播放器**：OpenList 出直链，播放端（手机/盒子）自行
-   软解——与硬解无关，仅在目标机本身作播放头时用上面的 nut 管道。
-
-## 常见问题
-
-- **第二个 ffmpeg 硬解进程挂起**：单会话限制，排队执行。
-- **`Failed to open /dev/video0` / 解码器列表无 v4l2m2m**：模块未加载，
-  回到 README 部署节。
-- **硬解输出与软解逐帧有 ±3 内的亮度差**：M8B 输出位深舍入，正常。
-- **MPEG-2 文件末尾少 1-2 帧**：固件只在下一幅图开始时完成上一幅，
-  EOS 由驱动软件冲刷兜底；属已知行为。
-- **用完恢复原状**：`rmmod meson-vdec && rmmod meson8b-runtime`。
+结束所有客户端后依次执行 `rmmod meson_venc`、`rmmod meson_vdec`、
+`rmmod meson8b_runtime`，恢复被覆盖的固件/overlay 文件。三模块完整卸载已
+实测，DOS 资源和 video 节点都撤销，原启动路径保持原状。

@@ -1,146 +1,143 @@
-# meson8b-vcodec — 玩客云 (S805/Meson8b) 硬件 H.264 编解码，运行时加载、免重启
+# OneCloud Meson8b V4L2 codecs
 
-在不动目标机内核、设备树、`/boot` 的前提下，为 Linux `5.15.79-meson`（OneCloud/玩客云，
-WanOS/HiNAS 底座）提供可通过 ffmpeg `h264_v4l2m2m` 使用的 V4L2 M2M 硬件 H.264 解码与编码。
+为玩客云 S805、WanOS/HiNAS 原版 Linux `5.15.79-meson` 提供运行时加载的
+V4L2 Memory-to-Memory 编解码设备。使用原内核的设备树 overlay、canvas、
+时钟与媒体框架；构建在外部机器完成，无需改写 `/boot` 或重启。
 
-**实测状态（2026-11-13，目标机 100.87.212.107）**：1080p H.264 300 帧硬解输出与软解基线
-逐帧 MD5 300/300 一致；P0 零拷贝路径后整机 CPU 减半。**HCODEC 编码（P3）**：
-1080p30 H.264，ffmpeg `-c:v h264_v4l2m2m` 编码可用，输出软解可播，矩阵 PSNR
-42.6-45.7 dB（nv12/nv21/yuv420p，320x240-1920x1080）；1080p30 编码 CPU 5.85s vs
-软编 23.89s（-75%），28.4 fps 接近实时（libx264 ultrafast 19.5 fps）。
-模块可正常卸载，卸载后系统恢复原状，在役服务（OpenList、Home Assistant、
-Arcane agent、sublinkPro、VoCat）全程正常。
+2026-11-14 实机验证：JPEG 编码 320×240–1080p 八组输入矩阵通过；H.264
+硬解到硬编 720p、1080p Baseline 60 帧通过，1080p 连续五轮输出均可播放，
+逐帧 PSNR 平均 45.41 dB。独立 H.264 硬解与软解 NV12 MD5 60/60 一致。
+此前 300 帧硬解、CBR、MPEG-2/MPEG-4/VC-1/MJPEG 验证见 `evidence/`。
 
-**编码已知限制**：固定 QP=26（vendor fixed-quant 模型，码率控制 no-op）；
-同一时刻单编码会话；宽 16-1920。裸流 PSNR 比较前须 `setpts=N/(fps*TB)`
-重定时（elementary stream 无时间戳，否则 framesync 错配出假低值）。
+## 能力与边界
 
-## 为什么需要两个模块 + 一个固件文件
+| 路径 | 当前支持与验证边界 |
+| --- | --- |
+| 解码 | H.264、MPEG-1/2、MPEG-4 Part 2、VC-1 advanced、MJPEG；各 codec 的帧尾/色度限制见验收记录 |
+| H.264 编码 | `ffmpeg -c:v h264_v4l2m2m`，NV12/NV21/YUV420 输入；固定 QP 26 或非零 bitrate 开启软件 CBR；无 B 帧编码 |
+| JPEG 编码 | 标准 V4L2 JPEG CAPTURE，质量 1–100；输入为全量程 YCbCr；ffmpeg 7.0.2 没有 JPEG v4l2m2m 编码包装，使用 V4L2 客户端 |
+| 并发转码 | 一个解码会话 + 一个编码会话；720p、1080p Baseline 已验证；1080p B 帧并发受 64 MiB CMA 预算限制 |
+| HEVC | 固定厂商源码证实 Meson8b 有独立 HEVC 核；本仓库尚未实现 HEVC codec，也未做硬解验收 |
 
-目标机运行的是发行版原版内核，没有 vdec 驱动，也没有 vdec 设备树节点；且该机是在役
-生产机，不能随便换内核。本方案三件套全部运行时注入：
+仍有 CPU 字节序转换与编码输入拷贝，不声称端到端零拷贝。长时 JPEG、任意
+参考帧数的 1080p 并发及 HEVC 未验证。2026-11-14 服务基线中 SublinkPro、
+VoCat、Home Assistant 正常并保持运行；OpenList、Arcane 已不在运行列表，
+本轮不能替它们声称验收通过。
 
-1. **`meson8b-runtime.ko`** — 从固件目录读取 `meson/vdec/meson8b-runtime.dtbo`，
-   通过 `of_overlay_fdt_apply()` 把 vdec 设备树节点（含时钟/reset/canvas phandle）
-   挥发性叠加到运行中的设备树上，然后触发平台设备 probe。卸载时完整移除 overlay。
-   需要内核启用 `CONFIG_OF_OVERLAY`（见下）。
-2. **`meson-vdec.ko`** — staging meson-vdec 驱动的 Meson8b 移植：新增
-   `amlogic,meson8b-vdec` 平台数据、厂商复位序列、独立 shadow 参考帧缓冲 +
-   CPU 字节序转换的 capture 路径（原因见下）。
-3. **`meson-venc.ko`** — HCODEC H.264 编码器的 Meson8b 移植（P3）：厂商
-   供电/时钟/微码加载序列 + V4L2 M2M 接口。设备树节点同样由 runtime
-   overlay 注入（AO 寄存器映射两窗口 + DOS/HCODEC）。
-4. **`firmware/meson/vdec/meson8b_h264.bin`**、
-   **`firmware/meson/venc/meson8b_avc_enc.bin`** — 从 Hardkernel ODROID-C1
-   3.10 厂商内核固定提交提取的微码（来源与哈希见
-   `firmware/sources.json`）。
+## 架构
 
-Overlay 里的 phandle 是针对目标机**运行中的设备树**生成的（`scripts/make-overlay.py`
-读取 `/sys/firmware/devicetree/base` 解析 provider），不能直接用于其他机器。
+- `runtime/meson8b-runtime.ko`：加载挥发性 overlay，统一持有 DOS 寄存器区，
+  为共享控制位提供 IRQ 安全更新锁；依赖它的 codec 卸载后才能移除 overlay。
+- `vdec/meson-vdec.ko`：staging meson-vdec 的 Meson8b 平台和 codec 移植。
+  硬件参考帧保存在独立 DMA shadow，CPU 通过缓存别名转换字节序后输出 NV12M。
+- `venc/meson-venc.ko`：HCODEC H.264/JPEG 共用一个 V4L2 设备和单 open 所有权；
+  用同一 PMU regmap 原子更新电源位，DMA 区域按厂商布局分开分配。
+- `firmware/`：固定 Hardkernel 提交提取的微码、来源和 SHA-256；包括 GPL 许可。
 
-## Meson8b capture 字节序问题的解法
+## 外部构建与检查
 
-上游 canvas 驱动明确标注 Meson8 及更早硬件不支持 GX 世代使用的 canvas
-endian-swap 位（提交 `9a98fdf5b6e6`），而 staging 驱动的 YUV420M 输出路径依赖
-`MESON_CANVAS_ENDIAN_SWAP64` 把硬件输出的 64-bit 大端字重排成标准 NV12M 字节序。
-
-本移植不复用 GX 的 capture buffer 布局，而是：
-
-- `vdec/meson8b-capture.c`：解码期间硬件直接写入 `dma_alloc_coherent` 的 shadow
-  缓冲（独立于用户可见的 vb2 buffer，不污染仍被运动补偿引用的参考帧）；
-- 帧就绪后 `meson8b_copy_swap64()`（`vdec/meson8b-copy.h`）在 CPU 上做 8 字节
-  字节序交换，拷贝到 vb2 buffer 交给用户空间。
-- 因此输出路径含一次 CPU 拷贝（1080p 约 3 MB/帧），不是全硬件零拷贝；
-  实测该拷贝使整机 CPU 与耗时均高于纯软解（见 `evidence/ACCEPTANCE-2026-11-13.md`），
-  当前价值在正确性与可用性，性能收益需零拷贝路径（ROADMAP P0-2）。
-
-## 仓库布局
-
-```
-runtime/    meson8b-runtime.ko 源码（overlay 注入/移除）
-vdec/       meson-vdec.ko 源码（Meson8b 平台接入 + capture 转换）
-venc/       meson-venc.ko 源码（HCODEC H.264 编码器移植）
-firmware/   微码提取脚本与来源记录（bin 本体在 dist/）
-scripts/    make-overlay.py、extract-firmware.py、wdt-guard.py、venc-bench.py
-tests/      字节序转换单测（host 可跑）、overlay 生成单测、probe 工具
-build/      构建产物（.ko、.dtbo、combined.dtb，gitignore）
-private/    目标机实测脚本与日志（smoke/1080p 验证循环、CPU 基准）
-evidence/   取回的实测证据（帧哈希对比、dmesg、CPU 基准 JSON）
-config/     目标机原内核 config 快照
-```
-
-## 构建（外部交叉编译机，armhf）
-
-前置：与目标机 5.15.79-meson 匹配的内核源码树与构建目录（本任务用的是
-Armbian onecloud `ci-20221118-033748-UTC` 源码线，外层 `baseline/` + `patches/`
-重建，详见外层 `README.md`）。
+需要 Linux 5.15.79 OneCloud 匹配源码、目标配置和已准备好的构建目录。
+基线来源为 hzyitc/armbian-onecloud `ci-20221118-033748-UTC`，Armbian 提交
+`d01e3519a87ab6a3b8df3f71da81d7040137b49f`。本任务外层 `baseline/` 是原发行
+内核源码补丁；外层 `patches/`、研究版 README 和内核包是早期实验存档，
+不代表这里已验证的运行时实现。不要安装那个研究版启动包。
 
 ```sh
-KDIR=/path/to/linux-5.15.79-output CROSS_COMPILE=arm-linux-gnueabihf- make modules
-make dtbo          # 生成 meson8b-runtime.dtbo（也可在目标机上重生成，见下）
-# host 单测
-cc -O2 -o /tmp/test-copy tests/test_copy.c && /tmp/test-copy
-python3 -m unittest discover -s tests
+# GCC 11 armhf，目标 kernelrelease 必须是 5.15.79-meson
+KDIR=/absolute/path/to/matching/kernel-output make modules -j4
+python3 scripts/extract-firmware.py --fetch
+cc -O2 -Wall -Wextra -Werror tests/test_copy.c -o /tmp/test-copy && /tmp/test-copy
+cc -Wall -Wextra -Werror -fsanitize=address,undefined tests/test_jpeg.c -o /tmp/test-jpeg
+/tmp/test-jpeg
+python3 -m unittest discover -s tests -v
 ```
 
-`CONFIG_OF_OVERLAY` 必须启用（overlay 注入依赖）。目标机原 config
-`5.15.79-meson` 已启用（`CONFIG_OF_OVERLAY=y`），无需换内核。
+目标原配置已启用 `CONFIG_OF_OVERLAY=y`、`CONFIG_MESON_CANVAS=y`、
+`CONFIG_V4L2_MEM2MEM_DEV=m`。无需开启原内核的 staging：codec 独立构建。
+内核升级后必须按新配置与 ABI 重编，不能强制 insmod 或使用旧 vermagic。
 
-## 在目标机上部署（手动，一次性）
+`make dtbo` 的默认 DTS 是本次目标机快照。其他机器必须根据运行中的
+`/sys/firmware/devicetree/base` 重新生成，phandle 不可跨设备复用：
 
 ```sh
-# 拷贝 meson8b-runtime.ko meson-vdec.ko meson8b-runtime.dtbo 及固件
-mkdir -p /lib/firmware/meson/vdec
-cp meson8b_h264.bin /lib/firmware/meson/vdec/
-cp meson8b-runtime.dtbo /lib/firmware/meson/vdec/
-insmod meson8b-runtime.ko      # 注入 overlay，probe vdec，生成 /dev/video0
-insmod meson-vdec.ko           # （runtime 模块已触发 probe，通常随后自动加载）
-ffmpeg ... -c:v h264_v4l2m2m ...
-rmmod meson-vdec
-rmmod meson8b-runtime          # 移除 overlay，恢复原状
+python3 scripts/make-overlay.py --tree /sys/firmware/devicetree/base --output my.dts
+dtc -@ -I dts -O dtb -o meson8b-runtime.dtbo my.dts
 ```
 
-固件只在第一次 STREAMON 时通过 request_firmware 加载，probe 本身不读固件。
-若想对其它同型机器使用，先在目标机上重新生成 overlay：
+## 加载、使用与回滚
+
+固件和 overlay 放在 `/lib/firmware/meson/{vdec,venc}/`。加载驱动前保留被覆盖
+文件副本，模块文件保存在独立目录。模块依赖可由原系统 modprobe 加载：
 
 ```sh
-python3 scripts/make-overlay.py /sys/firmware/devicetree/base > my.dts
-dtc -@ -I dts -O dtb -o /lib/firmware/meson/vdec/meson8b-runtime.dtbo my.dts
+modprobe v4l2_mem2mem
+modprobe videobuf2_dma_contig
+modprobe videobuf2_vmalloc
+insmod meson8b-runtime.ko
+insmod meson-vdec.ko
+insmod meson-venc.ko
+# /dev/video 编号按实际注册顺序确定，ffmpeg 自动匹配设备
+ffmpeg -c:v h264_v4l2m2m -i input.mp4 -an -c:v h264_v4l2m2m -b:v 0 output.mp4
 ```
 
-## 验证（目标机）
-
-`private/1080p-cycle.py` 是完整验收循环：insmod → 软解基线 framemd5 →
-硬解 framemd5 → 逐帧比对 → rmmod → dmesg 增量检查 → 服务状态检查。
-本地跑法：`ssh root@target 'python3 -' < private/1080p-cycle.py`。
-结果证据在 `evidence/`。
-
-已知限制（详见外层 `BLOCKERS.md`）：仅 H.264 解码；分辨率切换/EOS/错误恢复路径
-未做长时压测；输出含 CPU 拷贝（P0 后已解决）；编码见上节限制。
-
-## 编码使用（目标机）
+并发时需要按实际流的 `MIN_BUFFERS_FOR_CAPTURE` 调整 ffmpeg 缓冲数量，
+不能为省内存把数量降到驱动要求以下。完整命令见 `docs/transcode.md`。
 
 ```sh
-modprobe v4l2_mem2mem && modprobe videobuf2_vmalloc
-insmod meson8b-runtime.ko        # overlay 含 vdec + venc 节点
-insmod meson-venc.ko             # 生成 /dev/video1（HCODEC encoder）
-mkdir -p /lib/firmware/meson/venc
-cp meson8b_avc_enc.bin /lib/firmware/meson/venc/   # 首次 STREAMON 时加载
-
-# ffmpeg 7：nv12/nv21/yuv420p（MPLANE 自动别名），宽 16-1920
-ffmpeg -f lavfi -i testsrc2=size=1920x1080:rate=30 \
-    -pix_fmt nv12 -c:v h264_v4l2m2m -f h264 out.h264
-
-rmmod meson-venc
-rmmod meson8b-runtime            # 恢复原状
+# 先结束客户端，再移除 codec，最后 runtime；原启动路径未改变
+rmmod meson_venc
+rmmod meson_vdec
+rmmod meson8b_runtime
+# 恢复安装前备份的固件/overlay，删除仅本次新增文件
 ```
 
-EOS drain 按 v4l2-mem2mem 契约（`V4L2_EVENT_EOS` + `V4L2_BUF_FLAG_LAST`）；
-同一时刻仅支持一个编码会话。质量/性能测量用 `scripts/venc-bench.py`
-（无值守 nohup，须配合 `scripts/wdt-guard.py` 看门狗护栏运行，方法见
-`evidence/ENCODE-ACCEPTANCE-2026-11-13.md`）。
+完整卸载已验证：codec 节点、DOS 占用和 overlay 都消失，服务保持运行。
+不自动建立开机加载单元。`scripts/jpeg-matrix.sh`、`scripts/transcode-smoke.sh`
+和 `scripts/transcode-stress.py` 是 `/root/venc-deploy` 的实机测试脚本；短时
+看门狗护栏和进程 kill deadline 用于 bring-up，不是服务启动机制。
 
-## License
+## 验证记录
 
-内核模块部分 GPL-2.0（同 staging meson-vdec 上游）。微码来自 Hardkernel
-GPL 发布，`firmware/sources.json` 记录逐文件 SHA-256。
+- `evidence/P6-JPEG-ENCODE-ACCEPTANCE-2026-11-14.md`：JPEG/AVC 回归、固件错误恢复。
+- `evidence/P6-TRANSCODE-ACCEPTANCE-2026-11-14.md`：并发修复、五轮压测、CMA 边界。
+- `docs/hevc-feasibility.md`：纠正无 HEVC 核结论，列出固定源码证据和待移植部分。
+- `ROADMAP.md`：已完成任务及长期可选项。RFC 上游化与自动加载不是当前交付。
+
+GPL-2.0 / GPL-2.0+，以各文件 SPDX 为准。微码来源许可和提取元数据见
+`LICENSE` 与 `firmware/sources.json`。
+
+## 校验包与自动恢复固件
+
+```sh
+# 外部主机收集已构建的三个模块、固件和本机专用 overlay
+scripts/package-runtime.sh /new/path/runtime-package
+# 在目标机执行；state 目录须是新目录，保存原固件副本和每步安装记录
+python3 runtime-package/scripts/runtime-device.py check runtime-package
+python3 runtime-package/scripts/runtime-device.py apply runtime-package /root/runtime-state
+python3 runtime-package/scripts/runtime-device.py rollback /root/runtime-state
+```
+
+脚本检查包哈希、原内核版本、OneCloud 身份与运行树 provider phandle；发现
+已有 codec 模块时拒绝 apply。固件覆盖前记账并保留副本，加载失败时尝试
+卸载后恢复。回滚拒绝覆盖安装后另行更新过的固件，保留 state 目录供核查。
+仅修改列入 manifest 的固件文件、加载/卸载模块，不改启动文件。
+
+## 内核源码补丁
+
+`patches/series` 的 additive 补丁将这三个模块加入
+`drivers/media/platform/meson/meson8b-vcodec/`，配置入口为
+`CONFIG_VIDEO_MESON8B_VCODEC=m`（其依赖限制为模块）。它保留相同的运行时
+加载机制；不是静态 DT 启动方案，也没有发布为上游 RFC。
+
+```sh
+# 在匹配 OneCloud 5.15.79 基线上，按 series 应用；不叠加旧研究版 vdec 补丁
+patch -d /path/to/linux -p1 --fuzz=0 < patches/0001-meson8b-runtime-codecs.patch
+# 配置片段：config/runtime-codecs.config
+make -C /path/to/kernel-output ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- \
+  CC=arm-linux-gnueabihf-gcc-11 LOCALVERSION=-meson \
+  M=/path/to/linux/drivers/media/platform/meson/meson8b-vcodec modules
+```
+
+补丁 `--fuzz=0` 应用、新增目录 Kbuild 交叉编译和 Kconfig 选通已核验，日志在
+`evidence/kernel-patch-2026-11-14/`。未为此重编或启动新内核；实机使用的是
+相同源码的外部模块。源码改动后可用 `scripts/export-kernel-patch.py` 重导出。

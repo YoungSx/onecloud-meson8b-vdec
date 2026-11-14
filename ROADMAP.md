@@ -31,8 +31,8 @@ H.264 encoder）三项全部完成**：1080p V4L2 M2M 编码可用（ffmpeg
    序列）；固件只在下一幅图开始时才完成上一幅，EOS 需 .drain 软件冲刷
    （延迟 work 等待在途图片，空 LAST 帧 + EOS 事件）。1080p30 MPEG-2：
    0.60s CPU vs 4.42s 软解（-86%），H.264 300 帧 framemd5 回归一致。
-   h265 在 M8B 上经 vdec_1 不可行（vdec_hevc.c 需要 GXL+ HEVC 核，
-   厂商 m8 目录虽有 h265 微码）——标记 N/A。
+   HEVC 不走 VDEC1；旧“无 HEVC 核”判断已被固定厂商源码证伪。
+   Meson8b 有独立 HEVC 解码块，V4L2 codec 尚未移植，见 P6-22。
 
 ## P3 — 编码（amvenc_avc 移植，验收 5）
 
@@ -93,7 +93,7 @@ H.264 encoder）三项全部完成**：1080p V4L2 M2M 编码可用（ffmpeg
     V4L2_PIX_FMT_AVS，ffmpeg 亦无 v4l2m2m 包装，集成层无落点。
     WMV3（simple/main）未选通：fate 无样片，留待有需求时翻转
     AV_SCRATCH_4 并补验收。H.263 N/A（h263_mc 在厂商树中未定义）、
-    HEVC 解码 N/A（M8B 无 HEVC 核）、encoder 多会话 N/A。
+    HEVC 仍待独立移植（旧无核结论更正，见 P6-22）；encoder 多会话 N/A。
     数据见 `evidence/RC-VC1-ACCEPTANCE-2026-11-13.md`。
 
 ## P6 — 能力扩展（2026-11-14 新增，按推荐优先级）
@@ -121,9 +121,15 @@ H.264 encoder）三项全部完成**：1080p V4L2 M2M 编码可用（ffmpeg
     仲裁 AVC/JPEG，时间戳、LAST+EOS、缺失/截断固件恢复验证通过。
     H.264 ioctl 与 ffmpeg 1080p 回归通过。见
     `evidence/P6-JPEG-ENCODE-ACCEPTANCE-2026-11-14.md`。
-21. 硬解→硬编转码管线（VDEC1+HCODEC 并发审计 + 压测）。
-22. HEVC 解码（HEVC_ASSIST_SCRATCH_* 寄存器考古，M8B 无独立
-    HEVC 核 —— 大概率 N/A，先做可行性结论）。
+21. ~~硬解→硬编转码管线~~：完成。共享 DOS 映射和控制寄存器锁、
+    同一 PMU regmap、编码 DMA 分区；720p 与 1080p Baseline 60 帧
+    可播，1080p 连续五轮，PSNR 平均 45.41 dB，独立硬解 MD5 60/60。
+    1080p B 帧并发仍受 64 MiB CMA 预算限制，不宣称支持。见
+    `evidence/P6-TRANSCODE-ACCEPTANCE-2026-11-14.md`。
+22. ~~HEVC 可行性核查~~：完成。固定厂商源码明确 `HAS_HEVC_VDEC=1`，
+    Meson8b 有独立 HEVC 核、1080p 上限；旧 N/A 结论错误。寄存器、
+    微码、时钟和移植缺口见 `docs/hevc-feasibility.md`。HEVC V4L2
+    解码实现与实机验收尚未完成，不宣称可用。
 
 ## P5 — 上游化（可选，长期）
 
