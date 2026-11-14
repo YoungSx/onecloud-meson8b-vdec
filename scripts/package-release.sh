@@ -19,6 +19,7 @@ mkdir -p "$dest"
 bash scripts/package-runtime.sh "$dest/runtime"
 python3 scripts/verify-package.py "$dest/runtime"
 bash scripts/package-source.sh "$dest/source"
+(cd "$dest/source"; sha256sum -c SHA256SUMS)
 commit=$(git rev-parse HEAD)
 epoch=$(git show -s --format=%ct HEAD)
 tar --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner \
