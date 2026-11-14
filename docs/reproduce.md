@@ -64,6 +64,9 @@ FFmpeg 7.0.2 来源及 SHA-256 固定在构建脚本中；独立工具只启用�
 哈希在 `evidence/hevc-2026-11-14/artifact-hashes.json`。随附源码补充包包含
 该提交的驱动、构建脚本、微码源与原 Linux/FFmpeg/v4l-utils tarball，便于离线重建。
 后续文档、枚举工具与证据提交没有改变已安装的驱动/固件。
+`supplement/samples/` 附有本次生成的三个 HEVC 样片、软解参考帧哈希和
+SPS 主机测试所需的 1080p 裸流。用 `scripts/verify-hashes.py` 比对完整帧数
+和哈希；单独 FFmpeg 成功退出不能证明损坏流或不支持的流正确解码。
 
 构建、模块安装、framehash 内容、错误恢复、systemd 启停和完整卸载均有
 日志；未重启、新启动内核与当前主线端口未验证。Linux-media RFC 为本地

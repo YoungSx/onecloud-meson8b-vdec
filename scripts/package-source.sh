@@ -22,6 +22,10 @@ git -C "$root" archive "$payload_commit" Makefile README.md LICENSE config \
 printf '%s\n' "$payload_commit" > "$dest/payload-source/SOURCE_COMMIT"
 git -C "$root" archive HEAD baseline docs scripts evidence |
   tar -xf - -C "$dest/supplement"
+mkdir "$dest/supplement/samples"
+for sample in small.mp4 1080p.mp4 crop.mp4 1080p.hevc software-small.md5 software-1080.md5 software-crop.md5; do
+    cp "$root/build/hevc/$sample" "$dest/supplement/samples/"
+done
 cp "$root/sources/ffmpeg/ffmpeg-7.0.2.tar.xz" "$dest/sources/ffmpeg/"
 cp "$linux_archive" "$dest/sources/"
 cp "$root/sources/v4l-utils/v4l-utils-1.22.1.tar.bz2" "$dest/sources/v4l-utils/"
