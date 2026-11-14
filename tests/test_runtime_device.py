@@ -10,6 +10,27 @@ spec.loader.exec_module(runtime)
 
 
 class RuntimeDeviceTests(unittest.TestCase):
+    def test_bilingual_docs_are_checked_and_omissions_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            names = ['modules/' + name for name in runtime.MODULE_FILES]
+            names += ['README.md', 'README.zh-CN.md', 'CHANGELOG.md', 'docs/installation.md']
+            names += ['firmware/meson/vdec/' + name for name in (
+                'meson8b-runtime.dtbo', 'meson8b_h264.bin', 'meson8b_hevc.bin',
+                'meson8b_mpeg12.bin', 'meson8b_mpeg4.bin', 'meson8b_vc1.bin', 'meson8b_mjpeg.bin')]
+            names += ['firmware/meson/venc/meson8b_avc_enc.bin',
+                      'firmware/meson/venc/meson8b_jpeg_enc.bin']
+            for name in names:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'test payload')
+            (root / 'SHA256SUMS').write_text(''.join(
+                f'{runtime.sha(root / name)}  {name}\n' for name in names))
+            self.assertEqual(len(runtime.checked_package(root)), len(names))
+            (root / 'docs/installation.md').write_bytes(b'tampered guide')
+            with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                runtime.checked_package(root)
+
     def test_restore_replaced_and_new_firmware_after_interrupted_apply(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)

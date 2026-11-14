@@ -1,36 +1,20 @@
 #!/usr/bin/env bash
-# Source companion for the already installed, immutable runtime payload.
+# Exact committed sources plus pinned upstream archives for offline rebuilds.
 set -euo pipefail
 root=$(cd -- "$(dirname -- "$0")/.." && pwd)
-dest=${1:?Usage: package-source.sh NEW_SOURCE_DIRECTORY}
+dest=${1:?Usage: package-source.sh NEW_SOURCE_DIRECTORY [SOURCE_COMMIT]}
 [[ ! -e "$dest" ]] || { echo 'Refusing existing source directory' >&2; exit 1; }
-payload_commit=bd1cb79ad502d0b8cdcf9667a0ceb0ca0f7876ab
-linux_archive="$root/sources/linux-5.15.79.tar.xz"
-mkdir -p "$root/sources"
-if [[ ! -f "$linux_archive" ]]; then
-    if [[ -f "$root/../sources/linux-5.15.79.tar.xz" ]]; then
-        cp "$root/../sources/linux-5.15.79.tar.xz" "$linux_archive"
-    else
-        curl -fsSL --max-time 180 https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.15.79.tar.xz -o "$linux_archive"
-    fi
-fi
-mkdir -p "$dest/payload-source" "$dest/sources/ffmpeg" "$dest/sources/vendor" \
-  "$dest/sources/v4l-utils" "$dest/supplement/scripts" "$dest/tools"
-git -C "$root" archive "$payload_commit" Makefile README.md LICENSE config \
-  firmware meson8b-runtime.dts patches runtime scripts systemd tests vdec venc |
-  tar -xf - -C "$dest/payload-source"
-printf '%s\n' "$payload_commit" > "$dest/payload-source/SOURCE_COMMIT"
-git -C "$root" archive HEAD baseline docs scripts evidence |
-  tar -xf - -C "$dest/supplement"
-mkdir "$dest/supplement/samples"
-for sample in small.mp4 1080p.mp4 crop.mp4 1080p.hevc software-small.md5 software-1080.md5 software-crop.md5; do
-    cp "$root/build/hevc/$sample" "$dest/supplement/samples/"
-done
+payload_commit=$(git -C "$root" rev-parse "${2:-HEAD}^{commit}")
+[[ -f "$root/sources/linux-5.15.79.tar.xz" ]]
+[[ -f "$root/sources/ffmpeg/ffmpeg-7.0.2.tar.xz" ]]
+[[ -f "$root/sources/v4l-utils/v4l-utils-1.22.1.tar.bz2" ]]
+mkdir -p "$dest/source" "$dest/sources/ffmpeg" "$dest/sources/vendor" "$dest/sources/v4l-utils"
+git -C "$root" archive "$payload_commit" | tar -xf - -C "$dest/source"
+printf '%s\n' "$payload_commit" > "$dest/source/SOURCE_COMMIT"
+printf '%s\n' "$payload_commit" > "$dest/SOURCE_COMMIT"
+cp "$root/sources/linux-5.15.79.tar.xz" "$dest/sources/"
 cp "$root/sources/ffmpeg/ffmpeg-7.0.2.tar.xz" "$dest/sources/ffmpeg/"
-cp "$linux_archive" "$dest/sources/"
 cp "$root/sources/v4l-utils/v4l-utils-1.22.1.tar.bz2" "$dest/sources/v4l-utils/"
-cp "$root/build/v4l2-tools/v4l2-ctl" "$dest/tools/"
-cp "$root/sources/v4l-utils/v4l-utils-1.22.1/COPYING" "$dest/tools/COPYING.v4l-utils"
 python3 - "$root" "$dest" <<'PYCODE'
 import hashlib
 import json
@@ -38,8 +22,8 @@ from pathlib import Path
 import shutil
 import sys
 root, dest = map(Path, sys.argv[1:])
-metadata = json.loads((root / 'firmware/sources.json').read_text())
-for codec, entry in metadata.items():
+metadata = json.loads((dest / 'source/firmware/sources.json').read_text())
+for entry in metadata.values():
     if not isinstance(entry, dict):
         continue
     for item in entry.get('files', [entry]):
@@ -57,20 +41,16 @@ for relative, digest in {
     if hashlib.sha256((dest / relative).read_bytes()).hexdigest() != digest:
         raise ValueError('Upstream archive checksum mismatch: ' + relative)
 PYCODE
-printf '%s\n' "$payload_commit" > "$dest/PAYLOAD_SOURCE_COMMIT"
-git -C "$root" rev-parse HEAD > "$dest/SUPPLEMENT_SOURCE_COMMIT"
 cat > "$dest/README.txt" <<'DOC'
-payload-source/ contains the exact sources of the installed runtime package.
-sources/ supplies original Linux, FFmpeg and v4l-utils archives and pinned firmware
-microcode sources. Copy sources/ into payload-source/ before building offline.
-supplement/ adds current build scripts, matching Armbian baseline, docs and
-acceptance evidence; use its scripts and baseline in payload-source/.
-See supplement/docs/reproduce.md. tools/v4l2-ctl is a separate static ioctl
-tool, not a modification of the installed runtime package. No boot image
-is supplied here. Source and binary licenses are included with their files.
+source/ is the exact committed tree identified by SOURCE_COMMIT.
+sources/ contains original Linux, FFmpeg and v4l-utils archives and the
+pinned vendor microcode sources. Copy sources/ into source/ for offline
+builds, then follow source/docs/build.md. Source archives need no Git
+checkout to build and package a runtime. Dated evidence is historical
+hardware acceptance, not a claim about every release build.
 DOC
 manifest=$(mktemp)
 trap 'rm -f "$manifest"' EXIT
 (cd "$dest"; find . -type f -printf '%P\0' | sort -z | xargs -0 sha256sum) > "$manifest"
 install -m 644 "$manifest" "$dest/SHA256SUMS"
-printf 'Source companion: %s\n' "$dest"
+printf 'Source package: %s\n' "$dest"

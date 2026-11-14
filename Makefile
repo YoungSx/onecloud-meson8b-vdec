@@ -9,7 +9,10 @@ ARCH ?= arm
 CROSS_COMPILE ?= arm-linux-gnueabihf-
 CC := $(CROSS_COMPILE)gcc-11
 
-.PHONY: modules
+.PHONY: modules test
+test:
+	bash scripts/test-host.sh
+
 modules:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) CC=$(CC) LOCALVERSION=-meson modules
 endif
