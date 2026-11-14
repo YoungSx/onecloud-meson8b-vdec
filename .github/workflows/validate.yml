@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install host dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential shellcheck
       - name: Tests, sanitizers and documentation
@@ -32,14 +32,14 @@ jobs:
     env:
       JOBS: '4'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install cross-build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-11-arm-linux-gnueabihf g++-11-arm-linux-gnueabihf \
             gcc-11-plugin-dev-arm-linux-gnueabihf build-essential flex bison bc \
             libssl-dev libelf-dev device-tree-compiler kmod curl xz-utils bzip2 pkg-config
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             sources/*.tar.xz
@@ -59,7 +59,7 @@ jobs:
           version=v0.0.0-ci
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then version=$GITHUB_REF_NAME; fi
           bash scripts/package-release.sh "$version" build/release 2>&1 | tee build/logs/package.log
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets
           path: |
@@ -68,7 +68,7 @@ jobs:
             build/release/PROVENANCE.json
           if-no-files-found: error
           retention-days: 14
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: build-logs
