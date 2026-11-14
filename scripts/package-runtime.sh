@@ -17,6 +17,9 @@ done
 cp -a "$root/firmware/meson" "$dest/firmware/"
 install -m 755 "$root/scripts/runtime-device.py" "$dest/scripts/"
 install -m 644 "$root/README.md" "$dest/README.md"
+install -m 644 "$root/LICENSE" "$dest/LICENSE"
+cp -a "$root/patches" "$dest/patches"
+cp -a "$root/config" "$dest/config"
 python3 - "$root/meson8b-runtime.dts" "$dest/TARGET_PROVIDERS.json" <<'PYCODE'
 import json,re,sys
 from pathlib import Path
