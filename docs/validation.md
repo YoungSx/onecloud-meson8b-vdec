@@ -1,0 +1,51 @@
+# 验证范围与证据
+
+下列结果来自 **2026-11-14 及之前的 OneCloud 实机记录**，原内核
+`5.15.79-meson`，64 MiB CMA。最终安装的驱动/固件来源为 `bd1cb79`；
+后续文档、打包和 CI 变更不自动继承新二进制的硬件验收。
+[部署快照](rollout-status.md)包含包哈希和服务状态。
+
+| 项目 | 已验证结果 | 证据 |
+| --- | --- | --- |
+| H.264 解码 | 1080p 300 帧逐帧一致；后续独立回归 60/60 一致 | [Decode](../evidence/ACCEPTANCE-2026-11-13.md) |
+| HEVC Main 8-bit | 320×240 10/10、1080p B 帧 30/30、854×480 crop 10/10 哈希一致；重复会话和恢复 | [HEVC](../evidence/HEVC-ACCEPTANCE-2026-11-14.md) |
+| H.264 编码 | 三种原始格式、多尺寸、CBR、强制关键帧；1080p30 编码 CPU 对比软编降低约 75% | [Encode](../evidence/ENCODE-ACCEPTANCE-2026-11-13.md) |
+| JPEG 编码 | 八组输入矩阵；3×300 张 1080p 图像软解；质量、时间戳、互斥及 EOS | [JPEG](../evidence/P6-JPEG-ENCODE-ACCEPTANCE-2026-11-14.md) / [Long run](../evidence/BFRAME-TRANSCODE-ACCEPTANCE-2026-11-14.md) |
+| H.264 并发转码 | 1080p B 帧输入十轮 60 帧完整；PSNR 最低 45.03 dB、平均 45.82 dB | [Concurrent B frames](../evidence/BFRAME-TRANSCODE-ACCEPTANCE-2026-11-14.md) |
+| 原有服务与回滚 | OpenList、Arcane、Home Assistant、SublinkPro、VoCat 均运行；加载/卸载/固件恢复通过 | [Final state](../evidence/hevc-2026-11-14/verified-live-state.log) / [Autoload](../evidence/hevc-2026-11-14/autoload-cycle.log) |
+| 设备枚举 | v4l2-ctl 枚举两个设备、格式和控件 | [Enumeration](../evidence/hevc-2026-11-14/v4l2-enumeration.log) |
+| 干净源码构建 | 原配置完整构建、三个外部模块哈希一致、additive 补丁/Kbuild | [Build](../evidence/hevc-2026-11-14/reproduced-codec-build.log) / [Hashes](../evidence/hevc-2026-11-14/reproduced-module-hashes.txt) |
+
+## 限制
+
+- HEVC Main10、tiles、长期参考帧未支持或广告；当前 8-bit 线性路径。
+- H.264 encoder 无 B 帧；一个 encoder open，共享 HCODEC 的 JPEG/AVC 互斥。
+- VC-1 advanced 的唯一图像匹配软解，但有历史末两帧 drain/RPS 重复显示边界。
+  MPEG-4/MPEG-2 的旧验收亦有对应帧尾边界，不能声称任意流逐帧完整。
+- MJPEG 带厂商全量程色度增益，不能声称与软解 bit-exact。
+- 分辨率切换由标准 V4L2 客户端验证 350 帧；FFmpeg 7.0.2 reinit 仍可能
+  等待持有的 buffer ref。独立 drain 补丁不宣称修复所有 reinit 行为。
+- 900 张 JPEG 和十轮并发是有界回归，非无限期生产 soak。
+- 未替换启动内核、未重启验收自动加载；当前主线端口和公开 RFC 未完成。
+- CPU 输出字节序转换与编码输入拷贝存在，非端到端零拷贝。
+
+旧 codec 详细记录：[MPEG-4/CBR](../evidence/RC-MPEG4-ACCEPTANCE-2026-11-13.md)、
+[VC-1](../evidence/RC-VC1-ACCEPTANCE-2026-11-13.md)、
+[MJPEG](../evidence/P6-MJPEG-ACCEPTANCE-2026-11-14.md)。
+
+## 主机 CI 与实机检查
+
+`make test` 复现微码，运行 Python 测试及 C ASan/UBSan。CI 还交叉构建原
+基线、检查补丁同步和包校验，但不连接生产设备、不宣称硬件测试通过。
+
+实机验证时记录 source commit、模块哈希、样片 metadata、完整帧数和图像
+内容。保留软解参考，对照输出帧哈希：
+
+```sh
+python3 scripts/verify-hashes.py software.md5 hardware.md5
+```
+
+缺失/损坏固件应有界失败，恢复后新会话应正常。损坏流可能输出部分帧且
+FFmpeg 返回 0；验收必须检查内容。完整测试后核查服务、内存回收、dmesg
+增量和卸载回滚。原始失败日志保留，最终记录及历史区别见
+[证据索引](../evidence/README.md)。
