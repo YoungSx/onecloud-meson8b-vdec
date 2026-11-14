@@ -25,6 +25,7 @@
 #define VENC_BITSTREAM_SIZE	0x100000
 #define VENC_MC_SIZE		(4096 * 4)
 #define VENC_FW_NAME		"meson/venc/meson8b_avc_enc.bin"
+#define VENC_JPEG_FW_NAME	"meson/venc/meson8b_jpeg_enc.bin"
 
 struct venc_core {
 	struct device *dev;
@@ -67,6 +68,8 @@ struct venc_ctx {
 	s32 rc_qp;			/* QP the controller walks */
 	struct v4l2_fract timeperframe;	/* feeds the CBR budget only */
 	u32 src_fmt;			/* V4L2_PIX_FMT_*, M-variant */
+	u32 dst_fmt;
+	u32 jpeg_quality;
 
 	/* single big buffer laid out per vendor buffspec */
 	void *buf_vaddr;
@@ -91,6 +94,8 @@ struct venc_ctx {
 	u32 sps_pps_size;
 	void *sps_pps;
 };
+
+void venc_jpeg_init(struct venc_ctx *ctx);
 
 static inline u32 venc_read(struct venc_core *core, u32 reg)
 {

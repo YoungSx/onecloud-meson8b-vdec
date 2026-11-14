@@ -101,6 +101,15 @@
 #define VLC_PIC_SIZE		HREG(0x1d31)
 #define VLC_PIC_POSITION	HREG(0x1d33)
 #define VLC_HCMD_CONFIG		HREG(0x1d54)
+#define VLC_JPEG_CTRL		HREG(0x1d58)
+#define VLC_HUFFMAN_ADDR	HREG(0x1d5a)
+#define VLC_HUFFMAN_DATA	HREG(0x1d5b)
+
+#define QDCT_JPEG_CTRL		HREG(0x1f25)
+#define QDCT_JPEG_X_START_END	HREG(0x1f26)
+#define QDCT_JPEG_Y_START_END	HREG(0x1f27)
+#define QDCT_JPEG_QUANT_ADDR	HREG(0x1f28)
+#define QDCT_JPEG_QUANT_DATA	HREG(0x1f29)
 
 /* ENCODER_STATUS protocol (HENC_SCRATCH_0) */
 #define ENCODER_IDLE		0
@@ -113,6 +122,10 @@
 #define ENCODER_IDR_DONE	9
 #define ENCODER_NON_IDR_DONE	10
 #define ENCODER_ERROR		0xff
+
+/* JPEG encoder status protocol (same scratch register, jpegenc ucode) */
+#define JPEGENC_MCU		3
+#define JPEGENC_DONE		4
 
 /* ie_me_mb_type encoding (vendor HENC_MB_Type_*) */
 #define HENC_MB_Type_I4MB	0x9

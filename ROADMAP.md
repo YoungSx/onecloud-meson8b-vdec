@@ -116,7 +116,11 @@ H.264 encoder）三项全部完成**：1080p V4L2 M2M 编码可用（ffmpeg
     mpeg2 回归 96 帧不变，rmmod 回退干净。harness 增加 MJPEG SOI
     分块 + V4L2_BUF_FLAG_LAST 干净退出 + FOURCC 参数化。
     FORCE_KEY_FRAME（0x009909e5 button 型）S_EXT_CTRLS 验证通过。
-20. JPEG 硬编码（HCODEC + jpeg_encoder_mc，AVC/JPEG 仲裁）。
+20. ~~JPEG 硬编码~~：完成。HCODEC JPEG CAPTURE + 1–100 质量控件，
+    NV12/NV21/YUV420 输入，320×240–1080p 八组均可软解播放；单 open
+    仲裁 AVC/JPEG，时间戳、LAST+EOS、缺失/截断固件恢复验证通过。
+    H.264 ioctl 与 ffmpeg 1080p 回归通过。见
+    `evidence/P6-JPEG-ENCODE-ACCEPTANCE-2026-11-14.md`。
 21. 硬解→硬编转码管线（VDEC1+HCODEC 并发审计 + 压测）。
 22. HEVC 解码（HEVC_ASSIST_SCRATCH_* 寄存器考古，M8B 无独立
     HEVC 核 —— 大概率 N/A，先做可行性结论）。

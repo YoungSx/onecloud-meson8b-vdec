@@ -20,6 +20,7 @@
 #include "../runtime/meson8b-runtime.h"
 #include "hcodec_regs.h"
 #include "venc.h"
+#include "jpeg-header.h"
 
 #define ENC_QUANT_DEFAULT	26
 #define ENC_GOP_DEFAULT		12
@@ -124,13 +125,18 @@ static void venc_fill_out_fmt(struct v4l2_pix_format_mplane *pix, u32 fourcc)
 			ALIGN(pix->plane_fmt[i].sizeimage, 8);
 }
 
-static void venc_fill_cap_fmt(struct v4l2_pix_format_mplane *pix)
+static void venc_fill_cap_fmt(struct v4l2_pix_format_mplane *pix, u32 fourcc)
 {
-	pix->pixelformat = V4L2_PIX_FMT_H264;
+	pix->pixelformat = fourcc;
 	pix->field = V4L2_FIELD_NONE;
 	pix->num_planes = 1;
 	pix->plane_fmt[0].bytesperline = 0;
 	pix->plane_fmt[0].sizeimage = VENC_BITSTREAM_SIZE;
+	if (fourcc == V4L2_PIX_FMT_JPEG) {
+		pix->colorspace = V4L2_COLORSPACE_JPEG;
+		pix->ycbcr_enc = V4L2_YCBCR_ENC_601;
+		pix->quantization = V4L2_QUANTIZATION_FULL_RANGE;
+	}
 }
 
 /* ---------------------------------------------------------------------
@@ -523,6 +529,9 @@ static void venc_set_input_format(struct venc_ctx *ctx)
 	}
 
 	venc_mfdin_basic(core, input, iformat, picsize_x, picsize_y);
+	if (ctx->dst_fmt == V4L2_PIX_FMT_JPEG)
+		venc_write(core, HCODEC_MFDIN_REG1_CTRL,
+			   iformat | BIT(13) | (2 << 29));
 }
 
 /*
@@ -688,6 +697,13 @@ static irqreturn_t venc_isr(int irq, void *data)
 
 	if (!core->done_pending)
 		return IRQ_HANDLED;
+	if (core->ctx->dst_fmt == V4L2_PIX_FMT_JPEG) {
+		if (status == JPEGENC_DONE) {
+			core->done_pending = false;
+			complete(&core->done);
+		}
+		return IRQ_HANDLED;
+	}
 
 	switch (status) {
 	case ENCODER_SEQUENCE_DONE:
@@ -750,6 +766,10 @@ static int venc_hw_init(struct venc_ctx *ctx)
 		venc_poweroff(core);
 		return ret;
 	}
+	if (ctx->dst_fmt == V4L2_PIX_FMT_JPEG) {
+		venc_write(core, HENC_SCRATCH_0, ENCODER_IDLE);
+		return 0;
+	}
 
 	core->need_reset = true;
 	core->hw_status = ENCODER_IDLE;
@@ -773,6 +793,8 @@ static int venc_hw_init(struct venc_ctx *ctx)
 static int venc_hw_start(struct venc_ctx *ctx)
 {
 	struct venc_core *core = ctx->core;
+	const char *fw_name = ctx->dst_fmt == V4L2_PIX_FMT_JPEG ?
+		VENC_JPEG_FW_NAME : VENC_FW_NAME;
 	int ret, i;
 
 	ctx->buf_vaddr = dma_alloc_coherent(core->dev, VENC_BUF_SIZE,
@@ -783,10 +805,14 @@ static int venc_hw_start(struct venc_ctx *ctx)
 	/* zero the input staging area so pad rows/bytes encode as black */
 	memset(ctx->buf_vaddr, 0, 0x6ba000);
 
-	ret = request_firmware(&ctx->fw, VENC_FW_NAME, core->dev);
+	ret = request_firmware(&ctx->fw, fw_name, core->dev);
 	if (ret) {
-		dev_err(core->dev, "missing firmware %s\n", VENC_FW_NAME);
+		dev_err(core->dev, "missing firmware %s\n", fw_name);
 		goto err_free;
+	}
+	if (ctx->fw->size != VENC_MC_SIZE) {
+		ret = -EINVAL;
+		goto err_firmware;
 	}
 
 	for (i = 0; i < 9; i++) {
@@ -805,6 +831,10 @@ static int venc_hw_start(struct venc_ctx *ctx)
 		goto err_canvas;
 
 	core->running = true;
+	dev_info(core->dev, "loaded firmware %s (%zu bytes)\n",
+		 fw_name, ctx->fw->size);
+	if (ctx->dst_fmt == V4L2_PIX_FMT_JPEG)
+		return 0;
 
 	/* harvest SPS + PPS with the vendor SEQUENCE/PICTURE commands */
 	ret = venc_start_cmd(ctx, ENCODER_SEQUENCE);
@@ -849,6 +879,7 @@ err_stop_hw:
 err_canvas:
 	for (i--; i >= 0; i--)
 		meson_canvas_free(core->canvas, ctx->canvas[i]);
+err_firmware:
 	release_firmware(ctx->fw);
 	ctx->fw = NULL;
 err_free:
@@ -881,6 +912,7 @@ static void venc_session_release(struct venc_ctx *ctx)
 
 static void venc_hw_stop(struct venc_ctx *ctx)
 {
+	ctx->core->done_pending = false;
 	venc_amrisc_stop(ctx->core);
 	venc_poweroff(ctx->core);
 	venc_session_release(ctx);
@@ -945,7 +977,7 @@ static void venc_stage_input(struct venc_ctx *ctx, struct vb2_buffer *b)
 
 	plane_sz = vb2_plane_size(b, 0);
 	src = vb2_plane_vaddr(b, 0);
-	venc_copy_rows(dst, cw, src, bpl, ctx->width, ps_y, plane_sz);
+	venc_copy_rows(dst, cw, src, bpl, ctx->width, ctx->height, plane_sz);
 
 	if (ctx->src_fmt == V4L2_PIX_FMT_YUV420M) {
 		/* U at cw*ps_y, V at cw*ps_y*5/4, stride cw/2 */
@@ -954,7 +986,7 @@ static void venc_stage_input(struct venc_ctx *ctx, struct vb2_buffer *b)
 			plane_sz = vb2_plane_size(b, i);
 			src = vb2_plane_vaddr(b, i);
 			venc_copy_rows(dst, cw / 2, src, bpl / 2,
-				       ctx->width / 2, ps_y / 2, plane_sz);
+				       ctx->width / 2, ctx->height / 2, plane_sz);
 		}
 	} else {
 		/*
@@ -964,7 +996,7 @@ static void venc_stage_input(struct venc_ctx *ctx, struct vb2_buffer *b)
 		dst = ctx->buf_vaddr + cw * ps_y;
 		plane_sz = vb2_plane_size(b, 1);
 		src = vb2_plane_vaddr(b, 1);
-		venc_copy_rows(dst, cw, src, bpl, ctx->width, ps_y / 2,
+		venc_copy_rows(dst, cw, src, bpl, ctx->width, ctx->height / 2,
 			       plane_sz);
 	}
 }
@@ -1053,6 +1085,50 @@ static int venc_encode_frame(struct venc_ctx *ctx, struct vb2_buffer *src,
 	return 0;
 }
 
+static int venc_encode_jpeg(struct venc_ctx *ctx, struct vb2_buffer *src,
+			    struct vb2_buffer *dst)
+{
+	struct venc_core *core = ctx->core;
+	u8 *stream = ctx->buf_vaddr + ctx->mem.bitstream_start - ctx->buf_paddr;
+	u32 size, ptr;
+	int ret;
+
+	venc_stage_input(ctx, src);
+	venc_amrisc_stop(core);
+	venc_set_input_format(ctx);
+	venc_jpeg_init(ctx);
+	venc_write(core, HCODEC_ASSIST_MBOX2_CLR_REG, 1);
+	venc_write(core, HCODEC_ASSIST_MBOX2_MASK, 1);
+	core->hw_status = ENCODER_IDLE;
+	reinit_completion(&core->done);
+	core->done_pending = true;
+	venc_write(core, HENC_SCRATCH_0, ENCODER_IDLE);
+	dma_wmb();
+	venc_amrisc_start(core);
+	ret = venc_wait_cmd(core, JPEGENC_DONE);
+	core->done_pending = false;
+	if (ret) {
+		dev_err(core->dev, "JPEG encode failed (%d), hw_status %u\n",
+			ret, core->hw_status);
+		venc_hw_stop(ctx);
+		return ret;
+	}
+	dma_rmb();
+	size = venc_read(core, VLC_TOTAL_BYTES);
+	ptr = venc_read(core, VLC_VB_WR_PTR);
+	if (size <= VENC_JPEG_HEADER_SIZE || size > VENC_BITSTREAM_SIZE ||
+	    size > vb2_plane_size(dst, 0) ||
+	    ptr < ctx->mem.bitstream_start + VENC_JPEG_HEADER_SIZE ||
+	    stream[size - 2] != 0xff || stream[size - 1] != 0xd9) {
+		dev_err(core->dev, "invalid JPEG output: size %u, write pointer %#x\n",
+			size, ptr);
+		return -EIO;
+	}
+	memcpy(vb2_plane_vaddr(dst, 0), stream, size);
+	vb2_set_plane_payload(dst, 0, size);
+	return 0;
+}
+
 /* ---------------------------------------------------------------------
  * V4L2 / vb2 plumbing
  */
@@ -1064,20 +1140,55 @@ static int venc_queue_setup(struct vb2_queue *vq, unsigned int *nbuffers,
 	struct venc_ctx *ctx = vb2_get_drv_priv(vq);
 	struct v4l2_pix_format_mplane pix = {};
 
-	if (V4L2_TYPE_IS_OUTPUT(vq->type)) {
-		int i;
+	unsigned int i;
 
+	if (V4L2_TYPE_IS_OUTPUT(vq->type)) {
 		pix.width = ctx->width;
 		pix.height = ctx->height;
 		venc_fill_out_fmt(&pix, ctx->src_fmt);
-		*nplanes = pix.num_planes;
-		for (i = 0; i < *nplanes; i++)
-			sizes[i] = pix.plane_fmt[i].sizeimage;
 	} else {
-		*nplanes = 1;
-		sizes[0] = VENC_BITSTREAM_SIZE;
+		venc_fill_cap_fmt(&pix, ctx->dst_fmt);
 	}
+	if (*nplanes) {
+		if (*nplanes != pix.num_planes)
+			return -EINVAL;
+		for (i = 0; i < *nplanes; i++)
+			if (sizes[i] < pix.plane_fmt[i].sizeimage)
+				return -EINVAL;
+		return 0;
+	}
+	*nplanes = pix.num_planes;
+	for (i = 0; i < *nplanes; i++)
+		sizes[i] = pix.plane_fmt[i].sizeimage;
 
+	return 0;
+}
+
+static int venc_buf_prepare(struct vb2_buffer *vb)
+{
+	struct venc_ctx *ctx = vb2_get_drv_priv(vb->vb2_queue);
+	struct v4l2_pix_format_mplane pix = {
+		.width = ctx->width, .height = ctx->height,
+	};
+	unsigned int i;
+
+	if (V4L2_TYPE_IS_OUTPUT(vb->type))
+		venc_fill_out_fmt(&pix, ctx->src_fmt);
+	else
+		venc_fill_cap_fmt(&pix, ctx->dst_fmt);
+	for (i = 0; i < pix.num_planes; i++) {
+		if (vb2_plane_size(vb, i) < pix.plane_fmt[i].sizeimage)
+			return -EINVAL;
+		if (V4L2_TYPE_IS_OUTPUT(vb->type)) {
+			/* Visible rows are copied; macroblock padding stays zero. */
+			if (vb->planes[i].data_offset ||
+			    vb2_get_plane_payload(vb, i) <
+			    pix.plane_fmt[i].bytesperline * ctx->height / (i ? 2 : 1))
+				return -EINVAL;
+		} else {
+			vb2_set_plane_payload(vb, i, 0);
+		}
+	}
 	return 0;
 }
 
@@ -1139,6 +1250,7 @@ static void venc_buf_queue(struct vb2_buffer *vb)
 
 static const struct vb2_ops venc_vb2_ops = {
 	.queue_setup = venc_queue_setup,
+	.buf_prepare = venc_buf_prepare,
 	.start_streaming = venc_start_streaming,
 	.stop_streaming = venc_stop_streaming,
 	.buf_queue = venc_buf_queue,
@@ -1213,7 +1325,7 @@ static void venc_work(struct work_struct *work)
 		return;
 	}
 
-	keyframe = ctx->gop_idx == 0;
+	keyframe = ctx->dst_fmt == V4L2_PIX_FMT_JPEG || ctx->gop_idx == 0;
 
 	if (!core->running) {
 		ret = venc_hw_start(ctx);
@@ -1224,7 +1336,9 @@ static void venc_work(struct work_struct *work)
 		}
 	}
 
-	ret = venc_encode_frame(ctx, &src->vb2_buf, &dst->vb2_buf);
+	ret = ctx->dst_fmt == V4L2_PIX_FMT_JPEG ?
+		venc_encode_jpeg(ctx, &src->vb2_buf, &dst->vb2_buf) :
+		venc_encode_frame(ctx, &src->vb2_buf, &dst->vb2_buf);
 	if (ret)
 		state = VB2_BUF_STATE_ERROR;
 
@@ -1245,7 +1359,7 @@ static int venc_querycap(struct file *file, void *fh,
 			 struct v4l2_capability *cap)
 {
 	strscpy(cap->driver, "meson-venc", sizeof(cap->driver));
-	strscpy(cap->card, "Meson8b H.264 Hardware Encoder",
+	strscpy(cap->card, "Meson8b H.264/JPEG Encoder",
 		sizeof(cap->card));
 	snprintf(cap->bus_info, sizeof(cap->bus_info), "platform:meson-venc");
 	return 0;
@@ -1264,9 +1378,9 @@ static int venc_enum_fmt(struct file *file, void *fh,
 			return -EINVAL;
 		f->pixelformat = out_fmts[f->index];
 	} else {
-		if (f->index)
+		if (f->index > 1)
 			return -EINVAL;
-		f->pixelformat = V4L2_PIX_FMT_H264;
+		f->pixelformat = f->index ? V4L2_PIX_FMT_JPEG : V4L2_PIX_FMT_H264;
 	}
 	return 0;
 }
@@ -1289,7 +1403,7 @@ static int venc_g_fmt(struct file *file, void *fh,
 	} else {
 		f->fmt.pix_mp.width = ctx->width;
 		f->fmt.pix_mp.height = ctx->height;
-		venc_fill_cap_fmt(&f->fmt.pix_mp);
+		venc_fill_cap_fmt(&f->fmt.pix_mp, ctx->dst_fmt);
 	}
 	return 0;
 }
@@ -1310,7 +1424,9 @@ static int venc_try_fmt(struct file *file, void *fh, struct v4l2_format *f)
 	} else {
 		f->fmt.pix_mp.width = clamp(f->fmt.pix_mp.width, 16u, 1920u);
 		f->fmt.pix_mp.height = clamp(f->fmt.pix_mp.height, 16u, 1088u);
-		venc_fill_cap_fmt(&f->fmt.pix_mp);
+		fourcc = f->fmt.pix_mp.pixelformat == V4L2_PIX_FMT_JPEG ?
+			V4L2_PIX_FMT_JPEG : V4L2_PIX_FMT_H264;
+		venc_fill_cap_fmt(&f->fmt.pix_mp, fourcc);
 	}
 	return 0;
 }
@@ -1321,6 +1437,10 @@ static int venc_s_fmt(struct file *file, void *fh, struct v4l2_format *f)
 	u32 fourcc;
 	int ret;
 
+	/* Geometry and codec determine both queues and the live firmware. */
+	if (vb2_is_busy(v4l2_m2m_get_src_vq(ctx->m2m_ctx)) ||
+	    vb2_is_busy(v4l2_m2m_get_dst_vq(ctx->m2m_ctx)))
+		return -EBUSY;
 	ret = venc_try_fmt(file, fh, f);
 	if (ret)
 		return ret;
@@ -1331,6 +1451,8 @@ static int venc_s_fmt(struct file *file, void *fh, struct v4l2_format *f)
 		ctx->src_fmt = fourcc;
 		ctx->width = f->fmt.pix_mp.width;
 		ctx->height = f->fmt.pix_mp.height;
+	} else {
+		ctx->dst_fmt = f->fmt.pix_mp.pixelformat;
 	}
 	return 0;
 }
@@ -1378,6 +1500,21 @@ static int venc_subscribe_event(struct v4l2_fh *fh,
 	}
 }
 
+static int venc_encoder_cmd(struct file *file, void *fh,
+			    struct v4l2_encoder_cmd *cmd)
+{
+	struct venc_ctx *ctx = venc_fh_to_ctx(file);
+	static const struct v4l2_event eos = { .type = V4L2_EVENT_EOS };
+	int ret;
+
+	ret = v4l2_m2m_encoder_cmd(file, ctx->m2m_ctx, cmd);
+	/* Empty OUTPUT: the helper completes LAST without invoking our work. */
+	if (!ret && cmd->cmd == V4L2_ENC_CMD_STOP &&
+	    v4l2_m2m_has_stopped(ctx->m2m_ctx))
+		v4l2_event_queue_fh(&ctx->fh, &eos);
+	return ret;
+}
+
 static const struct v4l2_ioctl_ops venc_ioctl_ops = {
 	.vidioc_querycap = venc_querycap,
 	.vidioc_enum_fmt_vid_cap = venc_enum_fmt,
@@ -1400,7 +1537,7 @@ static const struct v4l2_ioctl_ops venc_ioctl_ops = {
 	.vidioc_streamon = v4l2_m2m_ioctl_streamon,
 	.vidioc_streamoff = v4l2_m2m_ioctl_streamoff,
 	.vidioc_try_encoder_cmd = v4l2_m2m_ioctl_try_encoder_cmd,
-	.vidioc_encoder_cmd = v4l2_m2m_ioctl_encoder_cmd,
+	.vidioc_encoder_cmd = venc_encoder_cmd,
 	.vidioc_subscribe_event = venc_subscribe_event,
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
 };
@@ -1412,6 +1549,9 @@ static int venc_s_ctrl(struct v4l2_ctrl *ctrl)
 	struct v4l2_ctrl *min_qp, *max_qp;
 
 	switch (ctrl->id) {
+	case V4L2_CID_JPEG_COMPRESSION_QUALITY:
+		ctx->jpeg_quality = ctrl->val;
+		break;
 	case V4L2_CID_MPEG_VIDEO_GOP_SIZE:
 		ctx->gop_size = ctrl->val;
 		break;
@@ -1475,15 +1615,19 @@ static int venc_open(struct file *file)
 	ctx->width = 1920;
 	ctx->height = 1088;
 	ctx->src_fmt = V4L2_PIX_FMT_NV12M;
+	ctx->dst_fmt = V4L2_PIX_FMT_H264;
+	ctx->jpeg_quality = 90;
 	ctx->quant = ENC_QUANT_DEFAULT;
 	ctx->gop_size = ENC_GOP_DEFAULT;
 	ctx->timeperframe.numerator = 1;
 	ctx->timeperframe.denominator = 30;
 
 	hdl = &ctx->ctrl_handler;
-	ret = v4l2_ctrl_handler_init(hdl, 7);
+	ret = v4l2_ctrl_handler_init(hdl, 8);
 	if (ret)
 		goto err_free;
+	v4l2_ctrl_new_std(hdl, &venc_ctrl_ops, V4L2_CID_JPEG_COMPRESSION_QUALITY,
+			  1, 100, 1, 90);
 
 	v4l2_ctrl_new_std(hdl, &venc_ctrl_ops, V4L2_CID_MPEG_VIDEO_B_FRAMES,
 			  0, 0, 1, 0);
@@ -1708,6 +1852,8 @@ static struct platform_driver meson_venc_driver = {
 };
 module_platform_driver(meson_venc_driver);
 
-MODULE_DESCRIPTION("Meson8b HCODEC H.264 V4L2 m2m encoder");
+MODULE_DESCRIPTION("Meson8b HCODEC H.264/JPEG V4L2 m2m encoder");
+MODULE_FIRMWARE(VENC_FW_NAME);
+MODULE_FIRMWARE(VENC_JPEG_FW_NAME);
 MODULE_AUTHOR("YoungSx");
 MODULE_LICENSE("GPL");
