@@ -72,5 +72,13 @@
     "array": "vmjpeg_mc",
     "sha256": "e510ceec6c1712b153d8b68b69603bf8ae1ffe0a6f80c09b3e217ebaac8ea05e",
     "output_sha256": "fa99f5a7b12f95577c2ba9ff1697d8aa50524ec682df418f80de9f813dd87d34"
+  },
+  "jpeg_enc": {
+    "path": "drivers/amlogic/amports/m8/ucode/jpegenc/jpeg_encoder_mc.c",
+    "words": 222,
+    "array": "jpeg_encoder_mc",
+    "sha256": "d3af80d6c0fd444c82589a932523056a6c3af3fe51bbb27ccf2e18b6559d7e2b",
+    "output_sha256": "1542e1c65fdfdcfd86364a932473e1d887ae15b514f4b41999141b84dbd6dd6f",
+    "sentinel": false
   }
 }

@@ -109,6 +109,14 @@ def main():
         raise ValueError("MJPEG firmware output checksum or layout mismatch")
     outputs.append((blob, ROOT / "firmware/meson/vdec/meson8b_mjpeg.bin"))
 
+    # JPEG encoder: jpeg_encoder_mc[] (the m8b ucode tree carries an
+    # identical copy), zero-padded to one 16K IMEM image.
+    jpeg_enc = manifest["jpeg_enc"]
+    blob = _load_vendor(jpeg_enc, manifest["commit"]).ljust(16 * 1024, b"\0")
+    if hashlib.sha256(blob).hexdigest() != jpeg_enc["output_sha256"]:
+        raise ValueError("JPEG encoder firmware output checksum or layout mismatch")
+    outputs.append((blob, ROOT / "firmware/meson/venc/meson8b_jpeg_enc.bin"))
+
     for blob, out in outputs:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(blob)
